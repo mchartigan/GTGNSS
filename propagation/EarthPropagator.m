@@ -262,7 +262,8 @@ classdef EarthPropagator < handle
                 end
             end
 
-            plotformat("IEEE", 1, "scaling", 2, "coloring", "science");
+            % % not supported utility
+            % plotformat("IEEE", 1, "scaling", 2, "coloring", "science");
             plotEarthOrbit(obj.ts, permute(data, [2,1,3]), frame, "Satellite trajectories");
         end
 

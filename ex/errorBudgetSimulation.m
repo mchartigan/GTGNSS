@@ -4,6 +4,10 @@
 % Description:
 %    Chaining together simulations to develop a demonstration of error
 %    budgets for lunar navigation systems.
+%
+%    NOTE: THIS SCRIPT WILL NOT EXECUTE PROPERLY WITH THE BASE INSTALLATION
+%    OF GTGNSS. IT SHOULD BE USED FOR REFERENCE ONLY ON COMMAND
+%    IMPLEMENTATION.
 
 %% reset
 clc, clear, close all;
@@ -33,10 +37,10 @@ ELFO = '-909';                  % SPICE ID of ELFO s/c
 t0 = cspice_str2et(START);
 
 % planetary info
-bods = getplanets("MOON", "EARTH", "SUN", "JUPITER");
+bods = getplanets('MOON', "MOON", "EARTH", "SUN", "JUPITER");
 
 % store spherical harmonic coefficients for the moon from Lunar Prospector
-[~,C,S] = cofloader("data/LP165P.cof");
+[~,C,S] = cofloader("LP165P.cof");
 bods(1).C = C; bods(1).S = S;
 bods(1).frame = 'MOON_ME';      % body-fixed frame of coefficients
 moon = bods(1);                 % primary body
