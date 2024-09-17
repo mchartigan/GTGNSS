@@ -17,6 +17,8 @@ Once the repository is cloned, add the entire `GTGNSS` directory and its subdire
 addpath(genpath('path/to/repository'))
 ```
 
+For use globally, this line can be added to the end of the user's `startup.m` script -- found in the user's default MATLAB directory.
+
 ## Use
 
 Each subdirectory has modules and/or functions that can assist with orbit propagation or navigation filtering. Each module and function has a header describing the inputs (and outputs, if unclear) required to use each utility. Specific data sources are provided in the `res` directory when applicable, such as spherical harmonic coefficients for the Earth and Moon. For help information, use the command `help function-or-module-name`. If more specificity is needed, use `edit function-or-module-name` and peruse the in-line code documentation.
