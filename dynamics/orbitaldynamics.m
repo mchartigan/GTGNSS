@@ -45,6 +45,9 @@ for i=1:length(bodies)
     % f_sec = f_sec + bodies(i).GM * (x_s3 * Q - x_1s/r_s3^3);
 end 
 
+% compute drag
+f_d = 0;
+
 dxdt(1:3) = x(4:6);
-dxdt(4:6) = f_ns + f_sec;
+dxdt(4:6) = f_ns + f_sec + f_d;
 end

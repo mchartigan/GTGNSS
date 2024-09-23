@@ -1,0 +1,10 @@
+Tasks to improve library
+
+# Propagator
+ - Construct all propagators from a single module, specifying the central body as an argument
+ - Let users add propagators together to merge simulations
+
+# Filters
+ - Have all filters inherit a common parent class
+ - Make measurement inputs modular to filters so they can accept different measurements at different rates
+ - Integrate propagators into filters somehow without eschewing non-orbit applications

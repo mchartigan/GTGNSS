@@ -163,6 +163,36 @@ classdef EarthPropagator < handle
             obj.frame = frame;
         end
 
+        function dxdt = dynamics(obj,t,x)
+            %DYNAMICS Invokes the orbital dynamics, with relevant settings,
+            %for this propagator instance.
+            %   Input:
+            %    - t; simulation time in seconds past J2000
+            %    - x; satellite state
+            arguments
+                obj     (1,1)   EarthPropagator
+                t       (1,1)   double
+                x       (6,1)   double
+            end
+
+            dxdt = orbitaldynamics(t, x, obj.earth, obj.ord, obj.sec);
+        end
+
+        function A = partials(obj,t,x)
+            %PARTIALS Invokes the partials of dynamics, with relevant
+            %settings, for this propagator instance.
+            %   Input:
+            %    - t; simulation time in seconds past J2000
+            %    - x; satellite state
+            arguments
+                obj     (1,1)   EarthPropagator
+                t       (1,1)   double
+                x       (6,1)   double
+            end
+
+            A = orbitalpartials(t, x, obj.earth, obj.sec);
+        end
+
         function [fx,C] = ephemerisfit(obj,type,dt,N)
             %EPHEMERISFIT Fits given surrogate model type to propagated data.
             %   Input:

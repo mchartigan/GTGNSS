@@ -13,7 +13,7 @@ classdef LUMVE < handle
         R      (:,:)   double               % measurement noise
         opts   (1,1)   struct               % ODE45 propagation options
         n      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of states
-        m      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of steps in t_meas
+        m      (1,1)   {mustBeNonnegative, mustBeInteger} = 1      % # of steps in t_meas
         s      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of steps in t
         iter   (1,1)   {mustBePositive, mustBeInteger} = 1      % # of LUMVE iterations
         type   (1,1)   {mustBeOption} = "hybrid"                % dynamics type
@@ -60,11 +60,11 @@ classdef LUMVE < handle
 
             % check if I/O is correct (nargout == -1 acceptable, means
             % variable which is usually from anonymous funcs)
-            if nargin(f) ~= 2 || (nargout(f) ~= 1 && nargout(f) ~= -1)
+            if (nargin(f) ~= 2 && nargin(f) ~= -1) || (nargout(f) ~= 1 && nargout(f) ~= -1)
                 error("LUMVE:functionIO", ...
                     "f must accept (t,x) and return (dyn).")
             end
-            if nargin(dfdx) ~= 2 || (nargout(dfdx) ~= 1 && nargout(dfdx) ~= -1)
+            if (nargin(dfdx) ~= 2 && nargin(dfdx) ~= -1) || (nargout(dfdx) ~= 1 && nargout(dfdx) ~= -1)
                 error("LUMVE:functionIO", ...
                     "dfdx must accept (t,x) and return (dfdx).")
             end
