@@ -40,7 +40,8 @@ m = length(lines);          % lines in file
 n = floor(m / 15);          % number of SVs recorded (15 lines ea.)
 blank = cell(1,n);
 oes = struct('SV',blank,'PRN',blank,'t0',blank,'a',blank,'e',blank,'i',blank, ...
-             'RAAN',blank,'w',blank,'f',blank,'af0',blank,'af1',blank);
+             'RAAN',blank,'w',blank,'f',blank,'af0',blank,'af1',blank, ...
+             'gcfL1',blank,'gcfL2',blank);
 
 % iterate over each bank of data in file
 for j=1:n
