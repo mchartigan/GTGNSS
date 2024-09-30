@@ -20,6 +20,7 @@ function [oes,t0] = yuma2oes(file,rollover,tol)
 %    - tol; newton iteration tolerance for finding eccentric anomaly
 %   Output:
 %    - oes; list of OE structs
+%    - t0; start time, seconds past J2000
 arguments
     file     (1,:) {mustBeText}
     rollover (1,1) {mustBeInteger,mustBeNonnegative} = 2

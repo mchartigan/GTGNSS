@@ -6,7 +6,7 @@
 %    orbits and construct a navigation filter.
 
 %% reset
-clc, clear, close all;
+% clc, clear, close all;
 addpath(genpath(pwd));
 format long g;          % display long numbers, no scientific notation
 
