@@ -57,19 +57,19 @@ classdef EKF < handle
 
             % check if I/O is correct (nargout == -1 acceptable, means
             % variable which is usually from anonymous funcs)
-            if nargin(f) ~= 2 || (nargout(f) ~= 1 && nargout(f) ~= -1)
+            if (nargin(f) ~= 2 && nargin(f) ~= -1) || (nargout(f) ~= 1 && nargout(f) ~= -1)
                 error("EKF:functionIO", ...
                     "f must accept (t,x) and return (dyn).")
             end
-            if nargin(dfdx) ~= 2 || (nargout(dfdx) ~= 1 && nargout(dfdx) ~= -1)
+            if (nargin(dfdx) ~= 2 && nargin(dfdx) ~= -1) || (nargout(dfdx) ~= 1 && nargout(dfdx) ~= -1)
                 error("EKF:functionIO", ...
                     "dfdx must accept (t,x) and return (dfdx).")
             end
-            if nargin(h) ~= 2 || (nargout(h) ~= 1 && nargout(h) ~= -1)
+            if (nargin(h) ~= 2 && nargin(h) ~= -1) || (nargout(h) ~= 1 && nargout(h) ~= -1)
                 error("EKF:functionIO", ...
                     "h must accept (t,x) and return (y).")
             end
-            if nargin(dhdx) ~= 2 || (nargout(dhdx) ~= 1 && nargout(dhdx) ~= -1)
+            if (nargin(dhdx) ~= 2 && nargin(dhdx) ~= -1) || (nargout(dhdx) ~= 1 && nargout(dhdx) ~= -1)
                 error("EKF:functionIO", ...
                     "dhdx must accept (t,x) and return (dhdx).")
             end
