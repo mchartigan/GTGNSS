@@ -1,4 +1,4 @@
-classdef OrbitPropagator < handle
+classdef OrbitPropagator < Propagator
     %ORBITPROPAGATOR Parent module for a class of spacecraft orbit
     %propagators. Notable subclasses include LunarPropagator and
     %EarthPropagator.
@@ -9,9 +9,9 @@ classdef OrbitPropagator < handle
         % array of structs containing info about additional planets to consider
         sec     (1,:)   struct
         % starting time of sim, seconds past J2000
-        t0      (1,1)   double
+        t0
         % starting states of satellites @ t0 in J2000 frame
-        x0      (6,:)   double
+        x0
         % max degree/order of gravity model to use
         ord     (1,1)   {mustBeInteger,mustBePositive} = 1
         % number of satellites
@@ -19,8 +19,8 @@ classdef OrbitPropagator < handle
         % ODE45 options
         opts    (1,1)   struct
         % info stored from latest run (if frame == '', no run yet)
-        ts      (1,:)   double
-        xs      (6,:,:) double
+        ts
+        xs
         frame   (1,:)   char = ''
     end
     
@@ -76,21 +76,8 @@ classdef OrbitPropagator < handle
                 frame   (1,:)   char
             end
 
-            ts = linspace(obj.t0, obj.t0+tf, n);
-            xs = zeros(6,n,obj.nsats);
-            
-            for i=1:obj.nsats
-                [~,X] = ode45(@obj.dynamics, ts, obj.x0(:,i), obj.opts);
-                X = X';
-                for j=1:length(ts)
-                    X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
-                end
-                xs(:,:,i) = X;
-            end
-
-            obj.ts = ts;
-            obj.xs = xs;
-            obj.frame = frame;
+            ts = linspace(0, tf, n);
+            [ts,xs] = obj.runat(ts,frame);
         end
 
         function [ts,xs] = runat(obj,ts,frame)
@@ -153,8 +140,8 @@ classdef OrbitPropagator < handle
             A = orbitalpartials(t, x, obj.pri, obj.sec);
         end
 
-        function [fx,C] = ephemerisfit(obj,type,dt,N)
-            %EPHEMERISFIT Fits given surrogate model type to propagated data.
+        function [fx,C] = modelfit(obj,type,dt,N)
+            %MODELFIT Fits given surrogate model type to propagated data.
             %   Input:
             %    - type; "Kepler" or "polynomial", type of model fit -- fit
             %            to error from solving Kepler's problem, or entire
@@ -182,7 +169,7 @@ classdef OrbitPropagator < handle
                 x_base = zeros(6,N+1);
                 f_base =  @(tau) zeros(6,length(tau));
             else
-                error("ephemerisfit:invalidType", ...
+                error("modelfit:invalidType", ...
                     "Model type must be either 'Kepler' or 'polynomial'.");
             end
 

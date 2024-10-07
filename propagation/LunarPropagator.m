@@ -6,6 +6,7 @@ classdef LunarPropagator < OrbitPropagator
     
     properties
         % Add any additional properties here
+        var (6,6)   double      % continuous-time noise for filters
     end
     
     methods
@@ -43,6 +44,9 @@ classdef LunarPropagator < OrbitPropagator
             bods(1).frame = 'MOON_ME';      % body-fixed frame of coefficients
             obj.pri = bods(1);              % primary body
             obj.sec = bods(2:nbods+1);      % secondary bodies
+
+            % estimate noise, Q
+            obj.var = diag([[0 0 0] [1 1 1]*3e-5/ord].^2);
 
             % Parse x0
             errmsg = "x0 must be either an array of OE structs, (6,n) " + ...
