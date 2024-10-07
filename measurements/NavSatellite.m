@@ -4,8 +4,10 @@ classdef NavSatellite < handle
     %that's earth-based GNSS or lunar).
     
     properties
-        prop    (1,1)   OrbitPropagator         % propagator instance
-        filter  (1,1)   EKF                     % nav filter
+        % propagator instance (default one so MATLAB doesn't throw a fit)
+        prop    (1,1)   OrbitPropagator = OrbitPropagator(0,1)
+        % nav filter (default one so MATLAB doesn't throw a fit)
+        filter  (1,1)   EKF = EKF("discrete", @(~) 0, @(~) 0, [], @(~) 0, @(~) 0, @(~) 0, [], [])
     end
     
     methods
@@ -20,24 +22,25 @@ classdef NavSatellite < handle
             obj.filter = filter;
         end
         
-        function xs = getrefstates(obj,ts,x0,frame)
+        function xs = getrefstates(obj,ts,frame)
             %GETREFSTATES Returns reference trajectory information for the
             %satellite at the provided times and frame. Also referred to as
             %the true state.
             %   Input:
             %    - ts; eval time steps, seconds past J2000
-            %    - x0; true state at ts(1) in J2000 frame
             %    - frame; reference frame to return data in
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
-                x0      (6,1)   double
                 frame   (1,:)   char
             end
 
-            obj.prop.t0 = ts(1);
-            obj.prop.x0 = x0;
-            ts = ts - ts(1);
+            if ts(1) > obj.prop.t0
+                error("getrefstates:invalidInput", ...
+                    "Simulation times must be after starting epoch of propagator.");
+            end
+
+            ts = ts - obj.prop.t0;
             [~,xs] = obj.prop.runat(ts,frame);
         end
 
