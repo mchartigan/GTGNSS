@@ -127,14 +127,16 @@ classdef Clock < Propagator
             %state over time. Starting epoch is the current t0, x0
             %   Output:
             %    - fx; @(t) function handle, input seconds past J2000 and
-            %          it returns [bias (s); drift (s/s)]
+            %          it returns clock state
             %    - C; current bias, drift, aging used
             arguments
                 obj (1,1)   Clock
             end
 
             C = obj.x0;
-            fx = @(t) [1 t-obj.t0 (t-obj.t0)^2; 0 1 t-obj.t0] * obj.x0;
+            fx = @(t) [obj.x0(1) + (t-obj.t0)*obj.x0(2) + (t-obj.t0).^2/2*obj.x0(3); ...
+                       obj.x0(2) + (t-obj.t0)*obj.x0(3); ...
+                       ones(size(t))*obj.x0(3)];
         end
     end
 

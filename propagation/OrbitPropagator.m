@@ -209,7 +209,11 @@ classdef OrbitPropagator < Propagator
             v0 = obj.x0(4:6);
 
             for i=1:length(ts)
-                [rf,vf] = Kepler_universal(r0, v0, ts(i), obj.pri.GM, 1e-10);
+                try
+                    [rf,vf] = Kepler_universal(r0, v0, ts(i), obj.pri.GM, 1e-10);
+                catch
+                    0;
+                end
                 x(:,i) = [rf; vf];
             end
         end
