@@ -12,6 +12,8 @@ classdef OrbitPropagator < Propagator
         t0
         % starting states of satellites @ t0 in J2000 frame
         x0
+        % dimension of state
+        dim             = 6
         % max degree/order of gravity model to use
         ord     (1,1)   {mustBeInteger,mustBePositive} = 1
         % number of satellites
@@ -97,8 +99,8 @@ classdef OrbitPropagator < Propagator
             xs = zeros(6,n,obj.nsats);
             
             for i=1:obj.nsats
-                [~,X] = ode45(@obj.dynamics, ts, obj.x0(:,i), obj.opts);
-                X = X';
+                [~,X] = ode45(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
+                X = X(2:end,:)';
                 for j=1:length(ts)
                     X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
                 end
@@ -140,6 +142,44 @@ classdef OrbitPropagator < Propagator
             A = orbitalpartials(t, x, obj.pri, obj.sec);
         end
 
+        function P = proplyapunov(obj,ts,P0,sv)
+            %PROPLYAPUNOV Propagates Lyapunov equations (obj.lyapunov) from
+            %given to next time and provides covariance matrices. This
+            %   Input
+            %    - ts; propagation times, seconds past J2000
+            %    - P0; covariance of state x0
+            %    - sv; (optional) index of space vehicle to propagate for,
+            %          if nsats > 1
+            arguments
+                obj (1,1) OrbitPropagator
+                ts  (1,:) double
+                P0  (6,6) double
+                sv  (1,1) {mustBePositive,mustBeInteger} = 1
+            end
+
+            % catch invalid sv input
+            if sv ~= 1 && sv > obj.nsats
+                error("proplyapunov:invalidInput", ...
+                    "sv must be 1 < sv < obj.nsats.");
+            end
+
+            n = length(ts);
+            P = zeros(obj.dim, obj.dim, n);
+            
+            % reshape starting P to correct format
+            P0 = reshape(P0, obj.dim*obj.dim, 1);
+            % joint dynamics, since lyapunov requires obj.partials, which
+            % requires the current state.
+            jointdyn = @(t,x) [obj.dynamics(t, x(1:6)); ...
+                obj.lyapunov(x(7:end), obj.partials(t,x(1:6)), 0)];
+            [~,Y] = ode45(jointdyn, ts, [obj.x0(:,sv); P0], obj.opts);
+
+            % store covariance matrices in appropriate structure
+            for i=1:length(ts)
+                P(:,:,i) = reshape(Y(i,7:end)', obj.dim, obj.dim);
+            end
+        end
+
         function [fx,C] = modelfit(obj,type,dt,N)
             %MODELFIT Fits given surrogate model type to propagated data.
             %   Input:
@@ -148,6 +188,9 @@ classdef OrbitPropagator < Propagator
             %            trajectory
             %    - dt; time after t0 to propagate to
             %    - N; number of interpolation points
+            %   Output:
+            %    - fx; function handle @(t), returns s/c state in J2000
+            %    - C; model coefficients
             arguments
                 obj     (1,1)   OrbitPropagator
                 type    (1,:)   {mustBeText}
