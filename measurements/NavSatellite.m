@@ -12,6 +12,8 @@ classdef NavSatellite < handle
         clock   (1,1)   Clock = Clock(0,zeros(3,1),"none")
         % nav filter
         filter  (1,1)
+        % antenna object
+        ant     (1,1)   TransmitAntenna
         % reference state info (avoids recalling runto() on prop and clock
         % if data has already been requested before
         tr      (1,:)   double
@@ -27,7 +29,7 @@ classdef NavSatellite < handle
     end
     
     methods
-        function obj = NavSatellite(prop,clock,filter,meas,debug)
+        function obj = NavSatellite(prop,clock,filter,meas,ant,debug)
             %NAVSATELLITE Construct a NavSatellite instance.
             %   Inputs:
             %    - prop; propagator instance for generating future trajectories
@@ -38,18 +40,21 @@ classdef NavSatellite < handle
             %    - meas; struct containing measurement info for the chosen
             %            filter -- names should correspond to filter constructor
             %            arguments (may also include varargin)
+            %    - ant; TransmitAntenna object containing sat info
             %    - debug; should debug warnings be printed? true/false
             arguments
                 prop    (1,1)   OrbitPropagator
                 clock   (1,1)   Clock
                 filter  (1,:)   {mustBeText}
                 meas    (1,1)   struct
+                ant     (1,1)   TransmitAntenna
                 debug   (1,1)   = false
             end
 
             % assign instances
             obj.prop = prop;
             obj.clock = clock;
+            obj.ant = ant;
 
             if strcmp(filter, "EKF")
                 % CT process noise
@@ -209,8 +214,10 @@ classdef NavSatellite < handle
             %               separate for ephemeris and clock -- 0 means don't
             %               update
             %   Output:
-            %    - xm; model states, pos/vel in J2000
-            %    - xp; propagated states that models are based on
+            %    - xm; model states, pos/vel in J2000. If Tm provided,
+            %          becomes 2-page matrix where second page is xm(ts-Tm)
+            %    - xp; propagated states that models are based on. If Tm given,
+            %          becomes 2-page matrix where second page is xp(ts-Tm)
             %    - Pm; covariance of model fit from nav soln
             %    - Pp; covariance of propagation
             arguments
@@ -231,11 +238,15 @@ classdef NavSatellite < handle
                 t_prop = ts(1);
                 t_clk = ts(1);
                 for i=2:n-1
-                    if ts(i) >= t_prop + cadence(1)
+                    % as a quirk, require model updates to happen at odd
+                    % indices to avoid poor data transitions for delta
+                    % pseudoranges. i.e. the case where the first
+                    % pseudorange is pre-update and the second is post
+                    if ts(i) >= t_prop + cadence(1) && mod(i,2)
                         propupdate = [propupdate i];
                         t_prop = ts(i);
                     end
-                    if ts(i) >= t_clk + cadence(2)
+                    if ts(i) >= t_clk + cadence(2) && mod(i,2)
                         clkupdate = [clkupdate i];
                         t_clk = ts(i);
                     end
@@ -266,7 +277,7 @@ classdef NavSatellite < handle
 
                 if nargout > 1
                     % assign propagated states model is based on
-                    [~,temp] = obj.prop.runat(ts(int) - ts(int(1)),'J2000');
+                    [~,temp] = obj.prop.runat(ts(int) - ts(int(1)), 'J2000');
                     xp(1:6,int) = temp;
                 end
                 if nargout > 2
@@ -314,7 +325,7 @@ classdef NavSatellite < handle
             %the user.
             %   Input:
             %    - ts; eval time steps, seconds past J2000
-            %    - user; user state [pos (km); vel (km/s)] at time steps ts
+            %    - user; User object instance
             %    - frame; reference frame user data is provided in
             %    - opts; s/c settings struct all fields must be set:
             %             - x0 (see getnavstates input)
@@ -335,45 +346,101 @@ classdef NavSatellite < handle
                 opts    (1,1)   struct
             end
 
+            n = length(ts);
             % get true measurements
             [tt, r, dr] = obj.timeofflight(ts, user);
+
+            % is user using a PLL? i.e., instead of Doppler (direct
+            % velocity measurements) we need to get delta-pseudoranges
+            PLL = strcmpi(user.rec.carrier, "PLL");
+            if PLL
+                % catch if Tm is too large
+                if user.rec.Tm > min(ts(2:end)-ts(1:end-1))
+                    error("getmeasurements:invalidSpacing", ...
+                        "User Receiver.Tm must not be greater than minimum spacing between ts.");
+                end
+
+                % interleave times, i.e.
+                % [ts(1)-Tm, ts(1), ts(2)-Tm, ts(2), ts(3)-Tm, ts(3), ... ]
+                tt = [tt - user.rec.Tm; tt];
+                tt = tt(:)';
+                ts = [ts - user.rec.Tm; ts];
+                ts = ts(:)';
+            end
 
             % get user state info for measurements
             xref = obj.getrefstates(tt, 'J2000');
             xuser = user.getstate(ts, 'J2000');
+            if nargout > 2
+                [xmdl,xprop,Pmdl,Pprop] = obj.getmodelstates(tt, ...
+                        opts.x0, opts.P0, opts.cadence);
+            else
+                [xmdl,xprop] = obj.getmodelstates(tt, opts.x0, ...
+                        opts.P0, opts.cadence);
+            end
+
+            if PLL
+                % un-interleave times
+                n2 = length(tt);
+                tt = tt(2:2:n2);
+                ts = ts(2:2:n2);
+
+                % separate states
+                % store concatenated data and create 2-page 3D matrices, then
+                % un-interleave data, storing in 2 separate pages of matrix
+                % first tt(i)-Tm comes, then tt(i), so store first value on 
+                % second page and second on first page
+                xref = cat(3, xref(:,2:2:n2), xref(:,1:2:n2));
+                xuser = cat(3, xuser(:,2:2:n2), xuser(:,1:2:n2));
+                xmdl = cat(3, xmdl(:,2:2:n2), xmdl(:,1:2:n2));
+                xprop = cat(3, xprop(:,2:2:n2), xprop(:,1:2:n2));
+                % remove tt-Tm data from covariances
+                if nargout > 2
+                    Pmdl = Pmdl(:,:,2:2:n2);
+                    Pprop = Pprop(:,:,2:2:n2);
+                end
+            end
 
             psr_units = 1e3;    % convert distances from km to m
             psrr_units = 1e6;   % convert speeds from km/s to mm/s
 
             % create line-of-sight direction
-            los = xref(1:3,:) - xuser(1:3,:);
+            los = xref(1:3,:,:) - xuser(1:3,:,:);
             los = los ./ sqrt(sum(los.^2, 1));
 
             % computer error contributors and uncertainty
-            if nargout > 2
-                [xmdl,xprop,Pmdl,Pprop] = obj.getmodelstates(tt, opts.x0, opts.P0, opts.cadence);
-            else
-                [xmdl,xprop] = obj.getmodelstates(tt, opts.x0, opts.P0, opts.cadence);
-            end
+
             err_prop = xprop - xref;
             err_mdl = xmdl - xprop;
 
             % project error onto line-of-sight direction
-            n = length(tt);
             err.psr.prop = zeros(1,n);      % pseudorange error from nav uncertainty propagation
             err.psr.mdl = zeros(1,n);       % pseudorange error from model fitting
             err.psrr.prop = zeros(1,n);     % Doppler error from nav uncertainty propagation
             err.psrr.mdl = zeros(1,n);      % Doppler error from model fitting
             for i=1:n
-                err.psr.prop(i) = err_prop(1:3,i)' * los(:,i) * psr_units;
-                err.psr.mdl(i) = err_mdl(1:3,i)' * los(:,i) * psr_units;
-                err.psrr.prop(i) = err_prop(4:6,i)' * los(:,i) * psrr_units;
-                err.psrr.mdl(i) = err_mdl(4:6,i)' * los(:,i) * psrr_units;
+                err.psr.prop(i) = err_prop(1:3,i,1)' * los(:,i,1) * psr_units;
+                err.psr.mdl(i) = err_mdl(1:3,i,1)' * los(:,i,1) * psr_units;
+
+                if PLL      % delta-pseudoranges
+                    err.psrr.prop(i) = (err_prop(1:3,i,1)'*los(:,i,1) - ...
+                        err_prop(1:3,i,2)'*los(:,i,2)) / user.rec.Tm * psrr_units;
+                    err.psrr.mdl(i) = (err_mdl(1:3,i,1)'*los(:,i,1) - ...
+                        err_mdl(1:3,i,2)'*los(:,i,2)) / user.rec.Tm * psrr_units;
+                else        % Doppler
+                    err.psrr.prop(i) = err_prop(4:6,i,1)' * los(:,i,1) * psrr_units;
+                    err.psrr.mdl(i) = err_mdl(4:6,i,1)' * los(:,i,1) * psrr_units;
+                end
             end
             % pseudorange error from clock model
-            err.psr.clk = (err_mdl(7,:) + err_prop(7,:)) * obj.c;           % s to m
-            % Doppler error from clock model
-            err.psrr.clk = (err_mdl(8,:) + err_prop(8,:)) * obj.c * 1e3;    % s/s to mm/s
+            err.psr.clk = (err_mdl(7,:,1) + err_prop(7,:,1)) * obj.c;           % s to m
+            % velocity error from clock model
+            if PLL      % delta-pseudoranges
+                err.psrr.clk = (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
+                    err_prop(7,:,1)-err_prop(7,:,2)) / user.rec.Tm * obj.c * 1e3;   % s/s to mm/s
+            else        % Doppler
+                err.psrr.clk = (err_mdl(8,:,1) + err_prop(8,:,1)) * obj.c * 1e3;    % s/s to mm/s
+            end
 
             if nargout > 2
                 % project uncertainty onto line-of-sight direction
@@ -382,34 +449,77 @@ classdef NavSatellite < handle
                 var.psrr.prop = zeros(1,n);     % Doppler uncertainty from nav
                 var.psrr.mdl = zeros(1,n);      % Doppler uncertainty from model
                 for i=1:n
-                    var.psr.prop(i) = los(:,i)' * Pprop(1:3,1:3,i) * los(:,i) * psr_units^2;    % m^2
-                    var.psr.mdl(i) = los(:,i)' * Pmdl(1:3,1:3,i) * los(:,i) * psr_units^2;      % m^2
-                    var.psrr.prop(i) = los(:,i)' * Pprop(4:6,4:6,i) * los(:,i) * psrr_units^2;  % mm^2/s^2
-                    var.psrr.mdl(i) = los(:,i)' * Pmdl(4:6,4:6,i) * los(:,i) * psrr_units^2;    % mm^2/s^2
+                    var.psr.prop(i) = los(:,i,1)' * Pprop(1:3,1:3,i) * los(:,i,1) * psr_units^2;    % m^2
+                    var.psr.mdl(i) = los(:,i,1)' * Pmdl(1:3,1:3,i) * los(:,i,1) * psr_units^2;      % m^2
+                    var.psrr.prop(i) = los(:,i,1)' * Pprop(4:6,4:6,i) * los(:,i,1) * psrr_units^2;  % mm^2/s^2
+                    var.psrr.mdl(i) = los(:,i,1)' * Pmdl(4:6,4:6,i) * los(:,i,1) * psrr_units^2;    % mm^2/s^2
                 end
                 % pseudorange uncertainty from clock model
-                var.psr.clk = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;           % m^2
-                % Doppler uncertainty from clock model
-                var.psrr.clk = reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) * (obj.c * 1e3)^2;  % mm^2/s^2
+                var.psr.clk = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;               % m^2
+                % velocity uncertainty from clock model
+                if PLL
+                    temp = obj.clock.dtcovariance(user.rec.Tm);
+                    var.psrr.clk = ones(1,n) * temp(1,1) * (obj.c * 1e3 / user.rec.Tm)^2;           % mm^2/s^2
+                else
+                    var.psrr.clk = reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) * (obj.c * 1e3)^2;  % mm^2/s^2
+                end
             end
 
-            % assign outputs
-            err.psr.total = err.psr.prop + err.psr.mdl + err.psr.clk;
-            err.psrr.total = err.psrr.prop + err.psrr.mdl + err.psrr.clk;
+            CN0 = obj.linkbudget(user, r);
+            [erec, vrec] = user.rec.noise(CN0, ts, r, dr);
 
+            % assign pseudorange outputs
+            err.psr.rec = erec(1,:);
+            var.psr.rec = vrec(1,:);
+            err.psr.total = err.psr.prop + err.psr.mdl + err.psr.clk + err.psr.rec;
             true.psr = r;
-            true.psrr = dr;
+            meas.psr = r + err.psr.total;
+
+            % is the user capable of measuring range-rate? (has carrier tracking)
+            rate = ~strcmpi(user.rec.carrier, "none");
+            if rate
+                % assign pseudorange-rate outputs
+                err.psrr.rec = erec(2,:);
+                var.psrr.rec = vrec(2,:);
+                err.psrr.total = err.psrr.prop + err.psrr.mdl + err.psrr.clk + err.psrr.rec;
+                true.psrr = dr;
+                meas.psrr = dr + err.psrr.total;
+            end
+
             true.transmittime = tt;
             true.receivetime = ts;
             true.err = err;
 
-            meas.psr = r + err.psr.total;
-            meas.psrr = dr + err.psrr.total;
-
             if nargout > 2
-                var.psr.total = var.psr.prop + var.psr.mdl + var.psr.clk;
-                var.psrr.total = var.psrr.prop + var.psrr.mdl + var.psrr.clk;
+                var.psr.total = var.psr.prop + var.psr.mdl + var.psr.clk + var.psr.rec;
+                if rate
+                    var.psrr.total = var.psrr.prop + var.psrr.mdl + var.psrr.clk + var.psrr.rec;
+                end
             end
+        end
+
+        function CN0 = linkbudget(obj,user,r)
+            %LINKBUDGET Computes the receiver carrier to noise density ratio.
+            %   Input:
+            %    - user; User object instance
+            %    - r; transmitter-receiver ranges (m)
+            %   Output:
+            %    - CN0; carrier to noise density ratio, dB-Hz
+            arguments
+                obj     (1,1)   NavSatellite
+                user    (1,1)   User
+                r       (1,:)   double {mustBePositive}
+            end
+
+            % link budget calculations to obtain C/N0
+            freq = obj.ant.freq;
+            Ad = 20 * log10((obj.c/freq)./(4*pi*r));    % dB, FSPL
+            Ae = 0;                                     % dB, no atmospheric attenuation
+            AP = obj.ant.P + obj.ant.gain + Ad + Ae;    % dBW, gain before receiver
+            RP = AP + user.ant.gain + user.ant.As;      % dBW, gain before amps
+            k = 1.3803e-23;                             % J/K, Boltzmann's constant
+            N0 = 10*log10(k * user.ant.Ts);             % dBW/Hz, noise power spectral density
+            CN0 = RP + user.ant.Nf + user.ant.L - N0;   % dB*Hz, carrier to noise density ratio
         end
 
         function [tt,r,dr] = timeofflight(obj,ts,user,tol)

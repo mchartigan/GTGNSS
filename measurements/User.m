@@ -7,15 +7,21 @@ classdef User < handle
         traj    (1,1)   function_handle = @(varargin) disp([])
         % reference frame for user trajectory
         frame   (1,:)   {mustBeText} = 'J2000'
+        % receiver
+        rec     (1,1)   Receiver = Receiver("none")
+        % receiver antenna
+        ant     (1,1)   ReceiveAntenna
     end
     
     methods
-        function obj = User(fx,frame)
+        function obj = User(fx,frame,rec,ant)
             %USER Construct a User instance.
             %   Input:
             %    - fx; function handle for user trajectory @(t) in seconds
             %          past J2000, returns [pos (km); vel (km/s)] in frame
             %    - frame; reference frame of fx
+            %    - rec; Receiver object instance
+            %    - ant; ReceiveAntenna object instance
             
             if (nargin(fx) ~= 1 && nargin(fx) ~= -1) || (nargout(fx) ~= 1 && nargout (fx) ~= -1)
                 error("User:invalidInput", "fx must take (t) as an input and output (x)");
@@ -23,6 +29,8 @@ classdef User < handle
 
             obj.traj = fx;
             obj.frame = frame;
+            obj.rec = rec;
+            obj.ant = ant;
         end
         
         function x = getstate(obj,ts,frame)
