@@ -11,6 +11,7 @@ classdef Clock < Propagator
         t0                              % sim start time, seconds past J2000
         x0                              % sim start state
         var     (3,3)   double          % variance of clock noise
+        dim             = 3             % dimension of state
         % info stored from latest run (if ts = [], no run yet)
         ts
         xs
@@ -100,6 +101,32 @@ classdef Clock < Propagator
             end
 
             obj.ts = ts + obj.t0;
+        end
+
+        function P = proplyapunov(obj,ts,P0)
+            %PROPLYAPUNOV Propagates Lyapunov equations (obj.lyapunov) from
+            %given to next time and provides covariance matrices. This
+            %   Input
+            %    - ts; propagation times, seconds past J2000
+            %    - P0; covariance of state x0
+            arguments
+                obj (1,1) Clock
+                ts  (1,:) double
+                P0  (3,3) double
+            end
+
+            n = length(ts);
+            P = zeros(obj.dim, obj.dim, n);
+            
+            % reshape starting P to correct format
+            P0 = reshape(P0, obj.dim*obj.dim, 1);
+            [~,Y] = ode45(@(t,p) obj.lyapunov(p, Clock.partials(t,obj.x0), obj.var), ...
+                          ts, P0, odeset("RelTol", 1e-9, "AbsTol", 1e-11));
+
+            % store covariance matrices in appropriate structure
+            for i=1:length(ts)
+                P(:,:,i) = reshape(Y(i,:)', obj.dim, obj.dim);
+            end
         end
 
         function Q = dtcovariance(obj,dt)
