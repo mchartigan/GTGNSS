@@ -457,6 +457,8 @@ classdef NavSatellite < handle
                 % pseudorange uncertainty from clock model
                 var.psr.clk = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;               % m^2
                 % velocity uncertainty from clock model
+                % TODO: FLL measurement is based on subsequent phase
+                % observations separated by T_c like the PLL
                 if PLL
                     temp = obj.clock.dtcovariance(user.rec.Tm);
                     var.psrr.clk = ones(1,n) * temp(1,1) * (obj.c * 1e3 / user.rec.Tm)^2;           % mm^2/s^2
