@@ -4,8 +4,6 @@ classdef NavSatellite < handle
     %that's earth-based GNSS or lunar).
     
     properties
-        % speed of light (m/s)
-        c       (1,1)   double = 299792458
         % propagator instance (default one so MATLAB doesn't throw a fit)
         prop    (1,1)   OrbitPropagator = OrbitPropagator(0,1)
         % clock instance (default one again ^)
@@ -26,6 +24,11 @@ classdef NavSatellite < handle
         P0      (9,9)   double      % doubles as default navigation info
         xn      (9,:)   double
         Pn      (9,9,:) double
+    end
+
+    properties (Constant)
+        % speed of light (m/s)
+        c       (1,1)   double = 299792458
     end
     
     methods
@@ -350,21 +353,32 @@ classdef NavSatellite < handle
             % get true measurements
             [tt, r, dr] = obj.timeofflight(ts, user);
 
-            % is user using a PLL? i.e., instead of Doppler (direct
-            % velocity measurements) we need to get delta-pseudoranges
-            PLL = strcmpi(user.rec.carrier, "PLL");
-            if PLL
+            % Whether it's a PLL or FLL, signal frequency is not observed
+            % directly; rather it's measured as a difference of two phases.
+            % Thus, clock states need to be obtained at measurement
+            % spacings.
+            % is the user capable of measuring range-rate? (has carrier tracking)
+            rate = ~strcmpi(user.rec.carrier, "none");
+            if rate
+                % determine rate measurement spacing (carrier predetection
+                % integration time, unless Tm is specified / larger)
+                if user.rec.T_c > user.rec.Tm
+                    Tm = user.rec.T_c;
+                else
+                    Tm = user.rec.Tm;
+                end
+
                 % catch if Tm is too large
-                if user.rec.Tm > min(ts(2:end)-ts(1:end-1))
+                if Tm > min(ts(2:end)-ts(1:end-1))
                     error("getmeasurements:invalidSpacing", ...
                         "User Receiver.Tm must not be greater than minimum spacing between ts.");
                 end
 
                 % interleave times, i.e.
                 % [ts(1)-Tm, ts(1), ts(2)-Tm, ts(2), ts(3)-Tm, ts(3), ... ]
-                tt = [tt - user.rec.Tm; tt];
+                tt = [tt - Tm; tt];
                 tt = tt(:)';
-                ts = [ts - user.rec.Tm; ts];
+                ts = [ts - Tm; ts];
                 ts = ts(:)';
             end
 
@@ -379,7 +393,7 @@ classdef NavSatellite < handle
                         opts.P0, opts.cadence);
             end
 
-            if PLL
+            if rate
                 % un-interleave times
                 n2 = length(tt);
                 tt = tt(2:2:n2);
@@ -408,8 +422,7 @@ classdef NavSatellite < handle
             los = xref(1:3,:,:) - xuser(1:3,:,:);
             los = los ./ sqrt(sum(los.^2, 1));
 
-            % computer error contributors and uncertainty
-
+            % computer state errors from propagation and model
             err_prop = xprop - xref;
             err_mdl = xmdl - xprop;
 
@@ -422,24 +435,20 @@ classdef NavSatellite < handle
                 err.psr.prop(i) = err_prop(1:3,i,1)' * los(:,i,1) * psr_units;
                 err.psr.mdl(i) = err_mdl(1:3,i,1)' * los(:,i,1) * psr_units;
 
-                if PLL      % delta-pseudoranges
+                if rate         % range-rate measurements capable
                     err.psrr.prop(i) = (err_prop(1:3,i,1)'*los(:,i,1) - ...
-                        err_prop(1:3,i,2)'*los(:,i,2)) / user.rec.Tm * psrr_units;
+                        err_prop(1:3,i,2)'*los(:,i,2)) / Tm * psrr_units;
                     err.psrr.mdl(i) = (err_mdl(1:3,i,1)'*los(:,i,1) - ...
-                        err_mdl(1:3,i,2)'*los(:,i,2)) / user.rec.Tm * psrr_units;
-                else        % Doppler
-                    err.psrr.prop(i) = err_prop(4:6,i,1)' * los(:,i,1) * psrr_units;
-                    err.psrr.mdl(i) = err_mdl(4:6,i,1)' * los(:,i,1) * psrr_units;
+                        err_mdl(1:3,i,2)'*los(:,i,2)) / Tm * psrr_units;
                 end
             end
             % pseudorange error from clock model
-            err.psr.clk = (err_mdl(7,:,1) + err_prop(7,:,1)) * obj.c;           % s to m
+            err.psr.clk = (err_mdl(7,:,1) + err_prop(7,:,1)) * obj.c;       % s to m
             % velocity error from clock model
-            if PLL      % delta-pseudoranges
-                err.psrr.clk = (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
-                    err_prop(7,:,1)-err_prop(7,:,2)) / user.rec.Tm * obj.c * 1e3;   % s/s to mm/s
-            else        % Doppler
-                err.psrr.clk = (err_mdl(8,:,1) + err_prop(8,:,1)) * obj.c * 1e3;    % s/s to mm/s
+            if rate     % receiver is capable of measuring rate
+                err.psrr.clk = ((err_mdl(8,:,1) + err_prop(8,:,1)) + ...
+                    (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
+                    err_prop(7,:,1)-err_prop(7,:,2)) / Tm) * obj.c * 1e3;   % s/s to mm/s
             end
 
             if nargout > 2
@@ -457,11 +466,18 @@ classdef NavSatellite < handle
                 % pseudorange uncertainty from clock model
                 var.psr.clk = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;               % m^2
                 % velocity uncertainty from clock model
-                if PLL
-                    temp = obj.clock.dtcovariance(user.rec.Tm);
-                    var.psrr.clk = ones(1,n) * temp(1,1) * (obj.c * 1e3 / user.rec.Tm)^2;           % mm^2/s^2
-                else
-                    var.psrr.clk = reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) * (obj.c * 1e3)^2;  % mm^2/s^2
+                % Added frequency offset error as well!! We trust the LNSS
+                % sats so when a receiver is comparing frequencies, it'll
+                % assume its own is wrong. Thus the frequency offset is
+                % mistakenly conferred onto the user or it throws off
+                % velocity measurements. The allan variance is just noise
+                % on top of frequency offset measurements, so since we are
+                % directly attempting to measure the frequency that noise
+                % is applied to our estimates + the offset!
+                if rate
+                    temp = obj.clock.dtcovariance(Tm);
+                    var.psrr.clk = (reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) + ...
+                        ones(1,n) * temp(1,1) / Tm^2) * (obj.c * 1e3)^2;    % mm^2/s^2
                 end
             end
 
@@ -475,8 +491,6 @@ classdef NavSatellite < handle
             true.psr = r;
             meas.psr = r + err.psr.total;
 
-            % is the user capable of measuring range-rate? (has carrier tracking)
-            rate = ~strcmpi(user.rec.carrier, "none");
             if rate
                 % assign pseudorange-rate outputs
                 err.psrr.rec = erec(2,:);
