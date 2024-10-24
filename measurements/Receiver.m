@@ -42,8 +42,13 @@ classdef Receiver < handle
         % bit transition time so it can bet two samples to form the
         % discriminator; doesn't matter if data = 0 (default AFS-complaint)
         T_c         (1,1)   double {mustBePositive} = 0.002
-        % s, delta pseudorange measurement spacing to derive rate (default 1s)
-        Tm          (1,1)   double {mustBePositive} = 1
+        % s, phase measurement spacing to derive rate (default 0s). If Tm <
+        % T_c, then T_c is used to derive rate (like in the case of a FLL).
+        % If Tm > T_c, Tm is used; this is mainly for PLLs when you want a
+        % more accurate measurement because you have the full phase counts
+        % for that whole time. Similar techniques may be implementable for
+        % a FLL?
+        Tm          (1,1)   double {mustBeNonnegative} = 0
     end
 
     properties (Access = private)
