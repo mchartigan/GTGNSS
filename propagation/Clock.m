@@ -27,26 +27,34 @@ classdef Clock < Propagator
             arguments
                 t0      (1,1)   double
                 x0      (3,1)   double
-                type    (1,:)   {mustBeText}
+                type    (1,:)
             end
             
             obj.t0 = t0;
             obj.x0 = x0;
             % parse clock type
-            if strcmp(type, "USO")          % ultra-stable oscillator
-                [s1,s2,s3] = DiffCoeffUSO();
-            elseif strcmp(type, "CSAC")     % chip-scale atomic clock
-                [s1,s2,s3] = DiffCoeffCSAC();
-            elseif strcmp(type, "RAFS")     % Rubidium atomic frequency standard
-                [s1,s2,s3] = DiffCoeffRAFS();
-            elseif strcmpi(type, "none")    % no clock (default initialization)
-                return
-            else
-                error("clockStateOverTime:ClockType", ...
-                    "Invalid clock type of %s. See documentation.", clk);
-            end
+            if isa(type, 'string')
+                if strcmp(type, "USO")          % ultra-stable oscillator
+                    [s1,s2,s3] = DiffCoeffUSO();
+                elseif strcmp(type, "CSAC")     % chip-scale atomic clock
+                    [s1,s2,s3] = DiffCoeffCSAC();
+                elseif strcmp(type, "RAFS")     % Rubidium atomic frequency standard
+                    [s1,s2,s3] = DiffCoeffRAFS();
+                elseif strcmpi(type, "none")    % no clock (default initialization)
+                    return
+                else
+                    error("Clock:invalidType", ...
+                        "Invalid clock type of %s. See documentation.", type);
+                end
 
-            obj.var = diag([s1 s2 s3].^2);
+                obj.var = diag([s1 s2 s3].^2);
+
+            elseif all(size(type) == [1 3]) && isa(type, 'double')
+                obj.var = diag(type .^ 2);
+            else
+                error("Clock:invalidType", ...
+                    "Clock type must either be string or list of coefficients.");
+            end
         end
 
         function [ts,xs,vs] = run(obj,tf,n)
