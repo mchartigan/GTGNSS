@@ -27,13 +27,12 @@ arguments
     tol      (1,1) double = 1e-9
 end
 
-% convert GPS week and seconds of week to seconds past J2000, TDB/UTC
+% convert GPS week and seconds of week to seconds past J2000, TDB
 temp = split(file, "week");
 temp = split(temp(2), ".");
-week = double(temp(1));
+week = double(temp(1)) + 1024*rollover;
 secs = double(temp(2));
-t0 = ((week + 1024*rollover) * 7 - 7300.5) * 86400 + secs;
-t0 = cspice_unitim(t0, 'GPS', 'TDB');
+t0 = gpstow2j2000(week, secs);
 
 % gather and parse lines
 lines = readlines(file);
