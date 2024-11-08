@@ -47,7 +47,9 @@ end
 
 % compute drag
 f_d = 0;
+% compute SRP
+f_SRP = 0;
 
 dxdt(1:3) = x(4:6);
-dxdt(4:6) = f_ns + f_sec + f_d;
+dxdt(4:6) = f_ns + f_sec + f_d + f_SRP;
 end

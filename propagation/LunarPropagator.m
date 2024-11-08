@@ -60,7 +60,7 @@ classdef LunarPropagator < OrbitPropagator
                     oes = xopt2oes(x0);
                     obj.nsats = 6;
                 elseif size(x0,1) == 6
-                    obj.x0 = cspice_sxform('MOON_OP', 'J2000', obj.t0) * x0;
+                    obj.x0 = x0;
                     obj.nsats = size(x0,2);
 
                     return;     % return early to avoid oes2x0
