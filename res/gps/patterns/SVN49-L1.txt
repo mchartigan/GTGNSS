@@ -1,4 +1,4 @@
-theta (deg),directivity (dB)
+theta (deg),gain (dBi)
 0.000000,13.630000
 2.000000,13.444169
 4.000000,13.162435
