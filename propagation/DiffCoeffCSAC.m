@@ -30,7 +30,7 @@ A = [1./taus taus];
 b = stds.^2 - a_hi^2 / 2 * taus.^2;
 coeff = [(A' * A) \ A' * b; a_hi^2 / 2];
 
-% % % plot model to confirm it's working
+% % plot model to confirm it's working
 % t = linspace(taus(1), taus(end), 1000)';
 % mdl = sqrt([1./t t t.^2] * coeff);
 % 
