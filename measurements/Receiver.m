@@ -67,7 +67,7 @@ classdef Receiver < handle
             obj.carrier = carrierloop;
         end
 
-        function [err,var] = noise(obj,CN0,ts,r,dr)
+        function [err,var,track] = noise(obj,CN0,ts,r,dr)
             %NOISE Returns the range and range-rate error (and variance) of
             %the receiver measurements.
             %   Input:
@@ -80,6 +80,7 @@ classdef Receiver < handle
             %           first row is range (m) and second is range-rate (mm/s)
             %    - var; variance of range (m^2) and range-rate
             %           measurements (mm^2/s^2)
+            %    - track; is the receiver violating its tracking thresh.?
             arguments
                 obj     (1,1)   Receiver
                 CN0     (1,:)   double
@@ -96,6 +97,10 @@ classdef Receiver < handle
             % compute additional line-of-sight dynamics
             ddr = gradient(dr, ts);             % mm/s^2, acceleration
             dddr = gradient(ddr, ts);           % mm/s^3, jerk
+
+            % receiver tracking constraints
+            n = length(r);                      % number of data points
+            track = zeros(1, n);
 
             % assign variance based on code tracking loop design
             if strcmpi(obj.code, "DLL")         % delay lock loop
@@ -135,6 +140,9 @@ classdef Receiver < handle
 
                 % convert from chips^2 to meters^2
                 var = var * (obj.c * Tc)^2;
+
+                % compute validity
+                track = 3*sqrt(var) > obj.D / 2;
             else
                 error("noise:invalidCodeLoop", ...
                     "Supported code tracking loops are: 'DLL'.");
@@ -164,6 +172,12 @@ classdef Receiver < handle
 
                 % add dynamic stress error
                 vdop = (sqrt(vdop) + abs(dyn) / (3*w0^obj.carrierorder)).^2;
+                % add reference satellite clock jitter
+                temp = getclockjitter("MicrochipMAC", 20);
+
+                % compute validity (assume ATAN2 discriminator)
+                track = [track; 3*sqrt(vdop) > lambda / (4*(1+obj.data))];
+
                 % vdop in mm^2, multiply by 2/Tm^2 to convert to mm^2/s^2
                 % (difference of two random variables)
                 var = [var; vdop * 2/obj.Tm^2];
@@ -190,6 +204,10 @@ classdef Receiver < handle
                 % to d^(n+1)R/dt^(n+1)
                 vdop = (sqrt(vdop) + abs(dyn) / (3*w0^obj.carrierorder)).^2;
                 var = [var; vdop];
+
+                % compute validity (assume ATAN2 discriminator)
+                track = [track; 3*sqrt(vdop) > lambda / (4*obj.T_c)];
+
             elseif ~strcmpi(obj.carrier, "none")
                 % loop isn't none (no carrier tracking)
                 error("linkbudget:invalidCarrierLoop", ...
@@ -198,7 +216,6 @@ classdef Receiver < handle
 
             % generate noise based on var
             m = size(var,1);        % range or range and Doppler?
-            n = length(r);          % number of data points
             err = zeros(m,n);
             for i=1:n
                 err(:,i) = mvnrnd(zeros(1,m), diag(var(:,i)))';

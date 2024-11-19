@@ -1,5 +1,5 @@
-function B = StabilityToAllan(taus,stds,a)
-%STABILITYTOALLAN Takes in short-term stability data points and fits them
+function B = stability2allan(taus,stds,a)
+%STABILITY2ALLAN Takes in short-term stability data points and fits them
 %to the Allan deviation model, providing the model coefficients. These
 %coefficients must be passed through AllanToDiffCoeff() to get the
 %resultant diffusion coefficients, though.

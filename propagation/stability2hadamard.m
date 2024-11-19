@@ -1,5 +1,5 @@
-function B = StabilityToHadamard(taus,stds)
-%STABILITYTOHADAMARD Takes in short-term stability data points and fits 
+function B = stability2hadamard(taus,stds)
+%STABILITY2HADAMARD Takes in short-term stability data points and fits 
 %them to the Hadamard deviation model, providing the model coefficients.
 %These coefficients must be passed through HadamardToDiffCoeff() to get 
 %the resultant diffusion coefficients, though.

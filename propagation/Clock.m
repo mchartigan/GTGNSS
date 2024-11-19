@@ -23,7 +23,7 @@ classdef Clock < Propagator
             %   Inputs:
             %    - t0; starting time in seconds past J2000
             %    - x0; starting state, [bias (s); drift (s/s); aging (1/s)]
-            %    - type; options include "CSAC", "RAFS", or "USO"
+            %    - type; see getclockcoefficients() for options
             arguments
                 t0      (1,1)   double
                 x0      (3,1)   double
@@ -34,20 +34,12 @@ classdef Clock < Propagator
             obj.x0 = x0;
             % parse clock type
             if isa(type, 'string')
-                if strcmp(type, "USO")          % ultra-stable oscillator
-                    [s1,s2,s3] = DiffCoeffUSO();
-                elseif strcmp(type, "CSAC")     % chip-scale atomic clock
-                    [s1,s2,s3] = DiffCoeffCSAC();
-                elseif strcmp(type, "RAFS")     % Rubidium atomic frequency standard
-                    [s1,s2,s3] = DiffCoeffRAFS();
-                elseif strcmpi(type, "none")    % no clock (default initialization)
+                if strcmpi(type, "none")    % no clock (default initialization)
                     return
-                else
-                    error("Clock:invalidType", ...
-                        "Invalid clock type of %s. See documentation.", type);
+                else                        % get from supported clocks
+                    coeff = getclockcoefficients(type, "Allan");
+                    obj.var = diag(coeff.^2);
                 end
-
-                obj.var = diag([s1 s2 s3].^2);
 
             elseif all(size(type) == [1 3]) && isa(type, 'double')
                 obj.var = diag(type .^ 2);
