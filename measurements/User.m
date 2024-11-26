@@ -33,7 +33,7 @@ classdef User < handle
             obj.ant = ant;
         end
         
-        function x = getstate(obj,ts,frame)
+        function x = getstates(obj,ts,frame)
             %GETSTATE Returns state data in the requested frame.
             %   Input:
             %    - ts; time steps, seconds past J2000
@@ -42,7 +42,7 @@ classdef User < handle
             x = obj.traj(ts);
             if ~strcmp(frame,obj.frame)
                 for i=1:length(ts)
-                    x(:,i) = cspice_sxform(obj.frame,frame,ts(i)) * x(:,i);
+                    x(1:6,i) = cspice_sxform(obj.frame,frame,ts(i)) * x(1:6,i);
                 end
             end
         end

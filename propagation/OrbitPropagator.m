@@ -189,7 +189,8 @@ classdef OrbitPropagator < Propagator
             %    - dt; time after t0 to propagate to
             %    - N; number of interpolation points
             %   Output:
-            %    - fx; function handle @(t), returns s/c state in J2000
+            %    - fx; function handle @(t), takes seconds past t0 and returns 
+            %          s/c state in J2000
             %    - C; model coefficients
             arguments
                 obj     (1,1)   OrbitPropagator
@@ -200,14 +201,16 @@ classdef OrbitPropagator < Propagator
 
             % basis = @(tau) cell2mat(arrayfun(@(x) chebyshevT(0:N_APPX,x), tau, 'UniformOutput', false));
 
+            x_init = obj.x0;
+
             % use chebichev nodes for interpolation
             span = chebichev(N);
             t_interp = (span + 1) * dt / 2;
 
             % Parse different model types
             if strcmpi(type, "Kepler")
-                x_base = obj.keplertool(t_interp);
-                f_base = @(tau) obj.keplertool(tau - obj.t0);
+                x_base = obj.keplertool(t_interp, x_init);
+                f_base = @(tau) obj.keplertool(tau, x_init);
             elseif strcmpi(type, "polynomial")
                 x_base = zeros(6,N+1);
                 f_base =  @(tau) zeros(6,length(tau));
@@ -230,26 +233,27 @@ classdef OrbitPropagator < Propagator
                 D = [C zeros(size(C)); zeros(size(C)) C];
     
                 % final model function
-                fx = @(tau) (basis(2*(tau - obj.t0)/dt - 1) * D)' ...
+                fx = @(tau) (basis(2*(tau)/dt - 1) * D)' ...
                             + f_base(tau);
             else
                 fx = @(tau) f_base(tau);
             end
         end
 
-        function x = keplertool(obj,ts)
+        function x = keplertool(obj,ts,x0)
             %KEPLERTOOL Wrapper for Kepler_universal to handle multiple
             %time requests.
             %   Input:
             %    - ts; states to propagate to by solving Kepler's problem
             arguments
                 obj (1,1)   OrbitPropagator
-                ts  (1,:)   double {mustBeNonnegative}
+                ts  (1,:)   double
+                x0  (6,:)   double
             end
 
             x = zeros(6,length(ts));
-            r0 = obj.x0(1:3);
-            v0 = obj.x0(4:6);
+            r0 = x0(1:3);
+            v0 = x0(4:6);
 
             for i=1:length(ts)
                 try
