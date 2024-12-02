@@ -138,8 +138,7 @@ classdef OrbitPropagator < Propagator
             % get lunar nonspherical gravity effects
             T = cspice_pxform('J2000', obj.pri.frame, t);
             x_me = T * x_1s;
-            f_ns = fast_harmonics(x_me, obj.ord, obj.pri.GM, ...
-                                  obj.pri.R, obj.pri.C, obj.pri.S);
+            f_ns = obj.fast_harmonics(x_me);
             f_ns = T' * f_ns;
             
             f_sec = zeros(3,1);
@@ -331,6 +330,83 @@ classdef OrbitPropagator < Propagator
                 handles{k} = @(tau,frame) cspice_sxform(obj.frame,frame,tau) ...
                              * ppval(pp, tau);
             end
+        end
+    end
+
+    methods (Access = private)
+        function f = fast_harmonics(obj,x)
+            %FAST_HARMONICS compute gravitational acceleration from spherical
+            %harmonics of body
+            %   Source: Stellite Orbits - Models, Methods, and
+            %   Applications; Montenbruck and Gill; pp. 66-68
+            %
+            %   Input:
+            %    - x; position vector of point (3,) [km]
+            arguments
+                obj (1,1)   OrbitPropagator
+                x   (3,1)   double
+            end
+        
+            nn = obj.ord;       % max degree (and order m) of harmonics
+            mu = obj.pri.GM;    % km^3/s^2, gravitational parameter of body
+            R = obj.pri.R;      % km, reference radius of body
+            C = obj.pri.C;      % non-normalized C coefficients of spherical harmonics (n,n)
+            S = obj.pri.S;      % non-normalized S coefficients of spherical harmonics (n,n)
+
+            [V, W] = obj.VandW(x, nn+1);
+        
+            n = 1:nn+1; m = 1:nn+1;
+            A = -mu/R^2;
+            f= A * [C(1:nn+1,1)' * V(2:nn+2,2)
+                    C(1:nn+1,1)' * W(2:nn+2,2)
+                    trace((n'-m+1) * (C(n,m).*V(n+1,m) + S(n,m).*W(n+1,m))')];
+        
+            m = m(2:end);
+            fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
+            f(1) = f(1) + A/2 * trace((C(n,m)*V(n+1,m+1)' + S(n,m)*W(n+1,m+1)') ...
+                   - fact * (C(n,m).*V(n+1,m-1) + S(n,m).*W(n+1,m-1))');
+            f(2) = f(2) + A/2 * trace((C(n,m)*W(n+1,m+1)' - S(n,m)*V(n+1,m+1)') ...
+                   + fact * (C(n,m).*W(n+1,m-1) - S(n,m).*V(n+1,m-1))');
+        end
+
+        function [V,W] = VandW(obj,x,nn)
+            %VANDW Computes normalized recursive Legendre polynomials for
+            %spherical harmonics of body.
+            %   Source: Stellite Orbits - Models, Methods, and
+            %   Applications; Montenbruck and Gill; pp. 66-68
+            %  
+            %   Inputs:
+            %    - x; position vector of point (3,) [km]
+            %    - nn; max degree and order of harmonics
+
+            R = obj.pri.R;
+        
+            r = norm(x);
+            V = zeros(nn+1,nn+1); W = V;
+            V(1,1) = R / r; W(1,1) = 0;         % initial conditions
+            A = R / r^2;
+        
+            for m=0:nn          % iterate over m cols (add 1 for indexing)
+                if m ~= 0       % if not V_00, W_00 (already defined)
+                    V(m+1,m+1) = (2*m-1)*A*(x(1)*V(m,m) - x(2)*W(m,m));
+                    W(m+1,m+1) = (2*m-1)*A*(x(1)*W(m,m) + x(2)*V(m,m));
+                end
+        
+                for n=m+1:nn    % iterate over n rows (add 1 for indexing)  
+                    V(n+1,m+1) = (2*n-1)/(n-m)*x(3)*A*V(n,m+1);
+                    W(n+1,m+1) = (2*n-1)/(n-m)*x(3)*A*W(n,m+1);
+                    if n ~= m+1
+                        V(n+1,m+1) = V(n+1,m+1) - (n+m-1)/(n-m)*A*R * V(n-1,m+1);
+                        W(n+1,m+1) = W(n+1,m+1) - (n+m-1)/(n-m)*A*R * W(n-1,m+1);
+                    end
+                end
+            end
+
+            % handle numbers that are too big (i.e. eliminate degree/order
+            % terms that are too small to matter).
+            V(or(isinf(V), isnan(V))) = 0;
+            W(or(isinf(W), isnan(W))) = 0;
+
         end
     end
 end

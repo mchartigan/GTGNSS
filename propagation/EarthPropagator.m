@@ -32,13 +32,14 @@ classdef EarthPropagator < OrbitPropagator
             obj = obj@OrbitPropagator(t0, ord, varargin);
             
             cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
-            [R,C,S] = cofloader("JGM3.cof");
+            [R,C,S,norms] = cofloader("JGM3.cof", true);
             
             % planetary info
             bods = getplanets('EARTH', "EARTH", "MOON", "SUN", "JUPITER");
             bods(1).R = R * 1e-3;           % convert from m to km
             bods(1).C = C;                  % store in earth struct for orbitaldynamics
             bods(1).S = S;                  % store in earth struct for orbitaldynamics
+            bods(1).norms = norms;          % store in earth struct for orbitaldynamics
             bods(1).frame = 'ITRF93';       % body-fixed frame of coefficients
             obj.pri = bods(1);              % primary body
             obj.sec = bods(2:nbods+1);      % secondary bodies
