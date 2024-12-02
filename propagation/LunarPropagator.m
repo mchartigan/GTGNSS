@@ -34,13 +34,14 @@ classdef LunarPropagator < OrbitPropagator
             obj = obj@OrbitPropagator(t0, ord, varargin);
             
             cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
-            [R,C,S] = cofloader("LP165P.cof");
+            [R,C,S,norms] = cofloader("LP165P.cof", false);
             
             % planetary info
             bods = getplanets('MOON', "MOON", "EARTH", "SUN", "JUPITER");
             bods(1).R = R * 1e-3;           % convert from m to km
             bods(1).C = C;                  % store in moon struct for orbitaldynamics
             bods(1).S = S;                  % store in moon struct for orbitaldynamics
+            bods(1).norms = norms;          % store in moon struct for orbitaldynamics
             bods(1).frame = 'MOON_ME';      % body-fixed frame of coefficients
             obj.pri = bods(1);              % primary body
             obj.sec = bods(2:nbods+1);      % secondary bodies
