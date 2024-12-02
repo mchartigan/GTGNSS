@@ -15,46 +15,75 @@ classdef Clock < Propagator
         % info stored from latest run (if ts = [], no run yet)
         ts
         xs
+        % simulation seed, generated on initialization and reused on runat() for
+        % consistency across runs
+        seed    (1,1)   {mustBeInteger} = 0;
+        % should debug output be used?
+        DEBUG   (1,1)   {mustBeNonnegative,mustBeInteger} = 0
+        
+    end
+    properties (SetAccess = private)
+        % fundamental oscillator-specific info
+        f       (1,1)   double {mustBePositive} = 1     % oscillator frequency, Hz
+        a       (1,1)   double = 0                      % aging rate, s/s/s
+        t_allan (1,:)   double {mustBePositive} = []    % Allan deviation intervals, s
+        s_allan (1,:)   double {mustBePositive} = []    % Allan deviations, s/s
+        f_noise (1,:)   double {mustBePositive} = []    % phase noise frequency offsets, Hz
+        n_noise (1,:)   double = []                     % phase noise, dBc/Hz
+    end
+    properties (Constant)
+        c = 299792458;                  % m/s, speed of light
     end
     
     methods
-        function obj = Clock(t0,x0,type)
+        function obj = Clock(t0,x0,type,varargin)
             %CLOCK Construct an oscillator/clock instance.
             %   Inputs:
             %    - t0; starting time in seconds past J2000
             %    - x0; starting state, [bias (s); drift (s/s); aging (1/s)]
-            %    - type; options include "CSAC", "RAFS", or "USO"
+            %    - type; string, see Clock.assignclockdata() for options
+            %    - debug; optional name-value pair (default false), print debug
+            %             output
+            %    - fit; optional name-value pair (default "Allan"), model
+            %           fit for short-term stability data
             arguments
                 t0      (1,1)   double
                 x0      (3,1)   double
-                type    (1,:)
+                type    (1,:)   {mustBeText}
+            end
+            arguments (Repeating)
+                varargin
             end
             
             obj.t0 = t0;
             obj.x0 = x0;
-            % parse clock type
-            if isa(type, 'string')
-                if strcmp(type, "USO")          % ultra-stable oscillator
-                    [s1,s2,s3] = DiffCoeffUSO();
-                elseif strcmp(type, "CSAC")     % chip-scale atomic clock
-                    [s1,s2,s3] = DiffCoeffCSAC();
-                elseif strcmp(type, "RAFS")     % Rubidium atomic frequency standard
-                    [s1,s2,s3] = DiffCoeffRAFS();
-                elseif strcmpi(type, "none")    % no clock (default initialization)
-                    return
-                else
-                    error("Clock:invalidType", ...
-                        "Invalid clock type of %s. See documentation.", type);
+            obj.DEBUG = false;
+            fit = "Allan";
+
+            if nargin > 3
+                for i=1:2:nargin-3
+                    if strcmp(varargin{i}, "debug")
+                        obj.DEBUG = varargin{i+1};
+                    elseif strcmp(varargin{i}, "fit")
+                        fit = varargin{i+1};
+                    end
                 end
-
-                obj.var = diag([s1 s2 s3].^2);
-
-            elseif all(size(type) == [1 3]) && isa(type, 'double')
-                obj.var = diag(type .^ 2);
-            else
-                error("Clock:invalidType", ...
-                    "Clock type must either be string or list of coefficients.");
+            elseif nargin < 3
+                error("Clock:nargin", "Clock.Clock() accepts >= 3 args.");
             end
+
+            % parse clock type
+            if ~isa(type, 'string')
+                error("Clock:invalidType", "Clock type must either be string.");
+            end
+
+            if strcmpi(type, "none")    % no clock (default initialization)
+                return
+            else                        % get from supported clocks
+                obj.assignclockdata(type, fit);
+            end
+
+            obj.seed = randi([1 1e9]);
         end
 
         function [ts,xs,vs] = run(obj,tf,n)
@@ -90,11 +119,14 @@ classdef Clock < Propagator
                 obj (1,1)   Clock
                 ts  (1,:)   double {mustBeNonnegative}
             end
+            
+            rng(obj.seed)       % initialize rng for consistency
 
             % initialize variables
             n = length(ts);
             xs = zeros(3,n);
-            xs(:,1) = obj.x0;
+            % scale by c^2 to improve integration
+            xs(:,1) = obj.x0 * obj.c^2;
             vs = zeros(3,3,n);
 
             for i=2:n
@@ -105,10 +137,14 @@ classdef Clock < Propagator
                 J = mvnrnd([0 0 0], obj.dtcovariance(dt), 1)';
                 % covariance of x at ts(i)
                 vs(:,:,i) = obj.dtcovariance(ts(i)); 
-                xs(:,i) = stm * xs(:,i-1) + J;
+                % scale J by c^2 to improve integration
+                xs(:,i) = stm * xs(:,i-1) + J * obj.c^2;
             end
 
             obj.ts = ts + obj.t0;
+            % rescale xs back by c^2
+            xs = xs ./ obj.c^2;
+            obj.xs = xs;
         end
 
         function P = proplyapunov(obj,ts,P0)
@@ -127,14 +163,16 @@ classdef Clock < Propagator
             P = zeros(obj.dim, obj.dim, n);
             
             % reshape starting P to correct format
-            P0 = reshape(P0, obj.dim*obj.dim, 1);
-            [~,Y] = ode45(@(t,p) obj.lyapunov(p, Clock.partials(t,obj.x0), obj.var), ...
+            P0 = reshape(P0, obj.dim*obj.dim, 1) * obj.c^4;
+            [~,Y] = ode45(@(t,p) obj.lyapunov(p, Clock.partials(t,obj.x0), obj.var * obj.c^4), ...
                           ts, P0, odeset("RelTol", 1e-9, "AbsTol", 1e-11));
 
             % store covariance matrices in appropriate structure
             for i=1:length(ts)
                 P(:,:,i) = reshape(Y(i,:)', obj.dim, obj.dim);
             end
+
+            P = P ./ obj.c^4;
         end
 
         function Q = dtcovariance(obj,dt)
@@ -157,6 +195,105 @@ classdef Clock < Propagator
                  v3/6*dt^3                      v3/2*dt^2             v3*dt   ];
         end
 
+        function assignclockdata(obj,name,fit)
+            %ASSIGNCLOCKDATA Sets a number of object properties based on
+            %the name of a given oscillator, accessing data from JSON.
+            %   Choose oscillator from list: "MicrochipCSAC", "MicrochipMAC",
+            %   "SafranMAC", "SafranMiniRAFS", "RakonMiniUSO", "AccubeatUSO",
+            %   "SafranRAFS", "ExcelitasRAFS"
+            %
+            %   Input:
+            %    - name; string name of oscillator (must match file exactly)
+            %    - fit; optional, model to fit. Either "Allan" (default) or 
+            %           "Hadamard"
+            arguments
+                obj     (1,1)   Clock
+                name    (1,:)   {mustBeText}
+                fit     (1,:)   {mustBeText} = "Allan"
+            end
+
+            fname = name + ".json";
+
+            try
+                data = jsondecode(fileread(fname));
+            catch
+                error("assignclockdata:fileNotFound", ...
+                    "File %s could not be found.", fname);
+            end
+
+            obj.f = data.frequency;
+            obj.a = data.aging / 86400;     % convert s/s/day -> s/s/s
+            obj.t_allan = data.stability.int;
+            obj.s_allan = data.stability.dev;
+            obj.f_noise = data.phase_noise.freq;
+            obj.n_noise = data.phase_noise.noise;
+
+            if strcmpi(fit, "Allan")
+                B = stability2allan(obj.t_allan, obj.s_allan, obj.a);
+                coeff = allan2diffcoeff(B);
+            elseif strcmpi(fit, "Hadamard")
+                B = stability2hadamard(obj.t_allan, obj.s_allan);
+                coeff = hadamard2diffcoeff(B);
+            else
+                error("assignclockdata:invalidFit", ...
+                    "%s not found, valid fit options found in documentation.", fit);
+            end
+
+            obj.var = diag(coeff.^2);
+            
+            if obj.DEBUG
+                % plot short-term stability fit to check quality
+                ta = obj.t_allan(1):obj.t_allan(end);
+                if strcmpi(fit, "Allan")
+                    sa = sqrt(B(1) ./ ta + B(2) .* ta + obj.a^2/2 * ta .^ 2);
+                else
+                    sa = sqrt(B(1) ./ ta + B(2) * ta + B(3) * ta .^ 3);
+                end
+            
+                figure();
+                loglog(ta, sa);
+                hold on;
+                scatter(obj.t_allan, obj.s_allan, 100, "rx");
+                xlabel("Interval (s)");
+                ylabel("\sigma_Y(\tau)");
+                title(sprintf("%s %s deviation fit", name, fit));
+                legend(["Model", "Data"]);
+            end
+        end
+
+        function [err,var] = getjitter(obj,fc,Bn)
+            %GETJITTER Returns the jitter noise of a clock at a specific noise
+            %bandwidth, based on the phase noise statistics provided in the 
+            %datasheets.
+            %   Inputs:
+            %    - fc; carrier frequency (to determine multiplication of
+            %          clock frequency needed
+            %    - Bn; carrier loop noise bandwidth
+            %   Outputs:
+            %    - err; sample error, in rad
+            %    - var; variance of clock jitter, radians^2
+            %
+            %   Ref: Zucca, C. and Tavella, P.; doi.org/10.1109/TUFFC.2005.1406554
+            arguments
+                obj (1,1)   Clock
+                fc  (1,1)   double {mustBePositive}
+                Bn  (1,1)   double {mustBePositive}
+            end
+
+            Bn = Bn / 2;        % noise bandwidth presumed two-sided, so get one side
+            N = fc / obj.f;
+            noise = 10.^((obj.n_noise + 20*log10(N))/10);
+            n_Bn = interp1(obj.f_noise, noise, Bn);
+            ii = find(obj.f_noise < Bn);
+            f_int = [obj.f_noise(ii) Bn];
+            n_int = [noise(ii) n_Bn];
+            A = trapz(f_int, n_int);
+            A = 10*log10(A);
+            
+            var = 2*10^(A/10) * (Clock.c/(fc*2*pi))^2;
+            err = mvnrnd(0, var);
+        end
+
         function [fx,C] = modelfit(obj)
             %MODELFIT Returns a second-order polynomial model for the clock
             %state over time. Starting epoch is the current t0, x0
@@ -169,9 +306,9 @@ classdef Clock < Propagator
             end
 
             C = obj.x0;
-            fx = @(t) [obj.x0(1) + (t-obj.t0)*obj.x0(2) + (t-obj.t0).^2/2*obj.x0(3); ...
-                       obj.x0(2) + (t-obj.t0)*obj.x0(3); ...
-                       ones(size(t))*obj.x0(3)];
+            fx = @(tau) [C(1) + (tau)*C(2) + (tau).^2/2*C(3); ...
+                       C(2) + (tau)*C(3); ...
+                       ones(size(tau))*C(3)];
         end
     end
 

@@ -137,6 +137,39 @@ classdef LunarPropagator < OrbitPropagator
                 exp(j) = (rf - r0) / (obj.ts(end) - obj.ts(1));
             end
         end
+
+        function [dRAAN0,dRAANf] = changeinrightascension(obj)
+            %CHANGEINRIGHTASCENSION Find the change in relative right ascension
+            %spacing over the propagation interval.
+
+            % throw error if there hasn't been a propagation yet
+            if isempty(obj.frame)
+                error("plotlastorbits:noData", ...
+                    "No data has been generated yet!");
+            end
+
+            dRAAN0 = zeros(1,obj.nsats);
+            dRAANf = zeros(1,obj.nsats);
+            RAAN0 = zeros(1,obj.nsats);
+            RAANf = zeros(1,obj.nsats);
+
+            % assign starting and ending right ascensions
+            for j=1:obj.nsats
+                xo = cspice_sxform(obj.frame, 'MOON_OP', obj.ts(1)) * obj.xs(:,1,j);
+                xf = cspice_sxform(obj.frame, 'MOON_OP', obj.ts(end)) * obj.xs(:,end,j);
+                [~,~,~,RAAN0(j),~,~] = rv2oe(xo(1:3), xo(4:6), obj.pri.GM);
+                [~,~,~,RAANf(j),~,~] = rv2oe(xf(1:3), xf(4:6), obj.pri.GM);
+            end
+
+            % expand arrays to make finding adjacent spacing easier
+            RAAN0 = [RAAN0 RAAN0(1)];
+            RAANf = [RAANf RAANf(1)];
+
+            for j=1:obj.nsats
+                dRAAN0(j) = angdiff(RAAN0(j+1), RAAN0(j));
+                dRAANf(j) = angdiff(RAANf(j+1), RAANf(j));
+            end
+        end
     end
 end
 

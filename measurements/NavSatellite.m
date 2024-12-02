@@ -9,14 +9,15 @@ classdef NavSatellite < handle
         % clock instance (default one again ^)
         clock   (1,1)   Clock = Clock(0,zeros(3,1),"none")
         % nav filter
-        filter  (1,1)
+        filter
         % antenna object
         ant     (1,1)   TransmitAntenna
         % reference state info (avoids recalling runto() on prop and clock
         % if data has already been requested before
-        tr      (1,:)   double
+        tr      (1,:)   double = []
         xr      (9,:)   double
         frame_r (1,:)   char = ''
+        fr      (1,1)   function_handle = @(~) 0
         % navigation state info (avoids rerunning filter if data has already 
         % been requested before)
         tn      (1,:)   double
@@ -24,6 +25,17 @@ classdef NavSatellite < handle
         P0      (9,9)   double      % doubles as default navigation info
         xn      (9,:)   double
         Pn      (9,9,:) double
+    end
+
+    properties (Access = private)
+        % properties defining navigation message info (ephemeris and clock
+        % models)
+        tm_s    (1,:)   double      % model transition times for ephemeris
+        % function handles for ephemeris models
+        fm_s    (1,:)   cell    = {}
+        tm_c    (1,:)   double      % model transition times for clock
+        % function handles for clock models
+        fm_c    (1,:)   cell    = {}
     end
 
     properties (Constant)
@@ -39,7 +51,7 @@ classdef NavSatellite < handle
             %            (OrbitPropagator, LunarPropagator, EarthPropagator)
             %    - clock; instance of s/c oscillator/clock (Clock)
             %    - filter; navigation filter type for finding s/c uncertainty,
-            %              options are: "EKF"
+            %              options are: "EKF", "const"
             %    - meas; struct containing measurement info for the chosen
             %            filter -- names should correspond to filter constructor
             %            arguments (may also include varargin)
@@ -72,6 +84,17 @@ classdef NavSatellite < handle
                     obj.filter = EKF("hybrid", @obj.dynamics, @obj.partials, ...
                         Q, @meas.h, meas.y, @meas.dhdx, meas.R, meas.t_meas);
                 end
+
+            elseif strcmpi(filter, "const")
+                % this option is for having a constant navigation uncertainty;
+                % meas is only required to have a single property, P0, that
+                % is a 9x9 covariance matrix
+                if ~all(size(meas.P0) == [9 9])
+                    error("NavSatellite:invalidMeas", ...
+                        "For filter 'const', meas.P0 must be 9x9.");
+                end
+                obj.filter.P0 = meas.P0;
+
             else
                 error("NavSatellite:invalidFilter", ...
                     'Filter must be "EKF". See documentation.');
@@ -106,6 +129,7 @@ classdef NavSatellite < handle
             A1 = obj.prop.partials(t,x(1:6));
             A2 = obj.clock.partials(t,x(7:9));
             A = [A1 zeros(6,3); zeros(3,6) A2];
+
         end
         
         function xr = getrefstates(obj,ts,frame)
@@ -126,9 +150,8 @@ classdef NavSatellite < handle
                     "Simulation times must be after starting epoch of propagator.");
             end
 
-            % avoid recalling if data has already been generated, as clock
-            % will create a random new trajectory
-            if all(size(ts) == size(obj.tr)) && ~any(ts - obj.tr) && strcmp(frame, obj.frame_r)
+            % avoid recalling if data has previously been generated
+            if length(obj.tr) == length(ts) && ~any(obj.tr - ts) && strcmp(frame, obj.frame_r)
                 % data has been generated previously
                 warning("NavSatellite:debug", "Returning previously generated data.\n");
                 xr = obj.xr;
@@ -145,74 +168,50 @@ classdef NavSatellite < handle
             obj.tr = ts + obj.prop.t0;
             obj.frame_r = frame;
             obj.xr = xr;
+            obj.fr = @(t) ppval(spline(obj.tr, obj.xr), t);
         end
 
-        function [xn,Pn] = getnavstates(obj,ts,x0,P0)
+        function [xn,Pn] = getnavstates(obj,ts)
             %GETNAVSTATES Returns estimated state and covariance from the 
             %navigation filter at the provided times in the J2000 frame.
             %   Input:
             %    - ts; eval time steps, seconds past J2000
-            %    - x0; state estimate at ts(1) in J2000 frame -- if empty,
-            %          noise P0 will be applied to reference trajectory to get
-            %          nav trajectory
-            %    - P0; uncertainty of x0 at ts(1) in J2000 frame
-            %    - frame; reference frame to return data in
             %   Output:
             %    - xn; state estimates at ts
             %    - Pn; state covariances at ts
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
-                x0      (:,:)   double
-                P0      (9,9)   double
             end
 
-            % avoid recalling if data has already been generated
-            if all(size(ts) == size(obj.tn)) && ~any(ts - obj.tn) && ...
-                    all(x0 == obj.x0) && all(P0 == obj.P0, 'all')
-                % data has been generated previously
-                warning("NavSatellite:debug", "Returning previously generated data.\n");
-                xn = obj.xn;
-                Pn = obj.Pn;
-                return;
-            end
-
-            if isempty(x0)
+            if isa(obj.filter, 'struct')
                 xn = obj.getrefstates(ts, 'J2000');
                 % add noise to reference trajectory for nav states
-                xn = mvnrnd(xn', P0)';
-                Pn = repmat(P0, 1, 1, length(ts));
-            elseif all(size(x0) == [9 1])
+                xn = mvnrnd(xn', obj.filter.P0)';
+                Pn = repmat(obj.filter.P0, 1, 1, length(ts));
+            else
                 error("getnavstates:noImplementedError", ...
                     "Navigation filtering feature is not yet implemented.");
 
                 % add ts to obj.filter.t with union() (maybe strip everything
                 % before ts(1)?)
                 % run filter, get data at time steps, and return it
-            else
-                error("getnavstates:invalidInput", ...
-                    "Input x0 must either be size [0 0] or [9 1].");
             end
 
             % store data in case called again
             obj.tn = ts;
-            obj.x0 = x0;
-            obj.P0 = P0;
+            obj.P0 = obj.filter.P0;
             obj.xn = xn;
             obj.Pn = Pn;
         end
 
-        function [xm,xp,Pm,Pp] = getmodelstates(obj,ts,x0,P0,cadence)
-            %GETMODELSTATES Returns model-derived spacecraft states (PVT).
+        function [xm,xp,Pm,Pp] = generatemodels(obj,ts,cadence)
+            %GENERATEMODELS Returns model-derived spacecraft states (PVT).
             %This is the information a user would be able to get from data
             %in the nav message. It encompasses ephemeris and clock model
             %errors when differenced from getrefstates().
             %   Input:
             %    - ts; eval time steps, seconds past J2000
-            %    - x0; state estimate at ts(1) in J2000 frame -- if empty,
-            %          noise P0 will be applied to reference trajectory to get
-            %          nav trajectory
-            %    - P0; uncertainty of x0 at ts(1) in J2000 frame
             %    - cadence; # of seconds after which models are updated, can be
             %               separate for ephemeris and clock -- 0 means don't
             %               update
@@ -226,37 +225,15 @@ classdef NavSatellite < handle
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
-                x0      (:,:)   double
-                P0      (9,9)   double
                 cadence (1,2)   double {mustBeNonnegative} = zeros(1,2);
             end
 
             n = length(ts);
-            [xnav, Pnav] = obj.getnavstates(ts, x0, P0);
+            [xnav, Pnav] = obj.getnavstates(ts);
 
-            % find indices for update intervals of models
-            propupdate = 1;
-            clkupdate = 1;
-            if any(cadence)
-                t_prop = ts(1);
-                t_clk = ts(1);
-                for i=2:n-1
-                    % as a quirk, require model updates to happen at odd
-                    % indices to avoid poor data transitions for delta
-                    % pseudoranges. i.e. the case where the first
-                    % pseudorange is pre-update and the second is post
-                    if ts(i) >= t_prop + cadence(1) && mod(i,2)
-                        propupdate = [propupdate i];
-                        t_prop = ts(i);
-                    end
-                    if ts(i) >= t_clk + cadence(2) && mod(i,2)
-                        clkupdate = [clkupdate i];
-                        t_clk = ts(i);
-                    end
-                end
-            end
-            propupdate = [propupdate n];
-            clkupdate = [clkupdate n];
+            I = NavSatellite.getupdateindices(ts, cadence);
+            obj.tm_s = ts(I(1,:));
+            obj.tm_c = ts(I(2,:));
 
             % store propagator info for reassignment
             t0p = obj.prop.t0;
@@ -270,13 +247,15 @@ classdef NavSatellite < handle
             if nargout > 2, Pm = zeros(9, 9, n); end
             if nargout > 3, Pp = zeros(9, 9, n); end
 
-            for i=1:length(propupdate)-1        % for orbit
-                obj.prop.t0 = ts(propupdate(i));            % new start time
-                obj.prop.x0 = xnav(1:6, propupdate(i));     % new start state
-                tf = ts(propupdate(i+1)) - obj.prop.t0;     % end of validity interval
-                fs = obj.prop.modelfit("Kepler", tf, 12);   % ephemeris model
-                int = propupdate(i):propupdate(i+1);        % validity interval indices
-                xm(1:6,int) = fs(ts(int));                  % assign model states
+            for i=1:size(I, 2)-1        % for orbit
+                obj.prop.t0 = ts(I(1,i));               % new start time
+                obj.prop.x0 = xnav(1:6, I(1,i));        % new start state
+                tf = ts(I(1,i+1)) - obj.prop.t0;        % end of validity interval
+                % ephemeris model, store in cell array
+                obj.fm_s{i} = obj.prop.modelfit("Kepler", tf, 12);
+                int = I(1,i):I(1,i+1);                  % validity interval indices
+                % assign model states relative to interval start
+                xm(1:6,int) = obj.fm_s{i}(ts(int) - ts(int(1)));
 
                 if nargout > 1
                     % assign propagated states model is based on
@@ -295,16 +274,18 @@ classdef NavSatellite < handle
                 end
             end
 
-            for i=1:length(clkupdate)-1         % for clock
-                obj.clock.t0 = ts(clkupdate(i));            % new start time
-                obj.clock.x0 = xnav(7:9, clkupdate(i));     % new start state
-                fc = obj.clock.modelfit();                  % clock model
-                int = clkupdate(i):clkupdate(i+1);          % validity interval indices
-                xm(7:9,int) = fc(ts(int));                  % assign model states
+            for i=1:size(I, 2)-1        % for clock
+                obj.clock.t0 = ts(I(2,i));              % new start time
+                obj.clock.x0 = xnav(7:9, I(2,i));       % new start state
+                % clock model, store in cell array
+                obj.fm_c{i} = obj.clock.modelfit();          
+                int = I(2,i):I(2,i+1);                  % validity interval indices
+                % assign model states relative to interval start
+                xm(7:9,int) = obj.fm_c{i}(ts(int) - ts(int(1)));     
 
                 if nargout > 1
                     % assign propagated states model is based on (same for clock)
-                    xp(7:9,int) = fc(ts(int));
+                    xp(7:9,int) = obj.fm_c{i}(ts(int) - ts(int(1)));
                 end
                 if nargout > 3
                     % propagate nav uncertainty while model is valid
@@ -322,8 +303,48 @@ classdef NavSatellite < handle
 
         % TODO: implement getsmartmodelstates() where updates are adaptive
 
-        function [meas,var,true] = getmeasurements(obj,ts,user,opts)
-            %GETMEASUREMENTS Computes pseudorange and pseudorange-rate
+        function x = getmodelstates(obj,ts,frame)
+            %GETMODELSTATES Given time(s) ts, return the model-computed
+            %spacecraft state (ephemeris and time) as if from the
+            %navigation message.
+            %   Input:
+            %    - ts; times past J2000 to get states at
+            %    - frame; optional (default 'J2000'), frame to return data in
+            arguments
+                obj     (1,1)   NavSatellite
+                ts      (1,:)   double
+                frame   (:,:)   {mustBeText} = 'J2000'
+            end
+
+            n = length(ts);
+            x = zeros(9,n);
+
+            % iterate over every time provided
+            for i=1:n
+                % iterate backwards through piecewise timesteps for ephemeris
+                for j=length(obj.tm_s)-1:-1:1
+                    % first start time that is <= given time, use that and break
+                    if ts(i) >= obj.tm_s(j)
+                        x(1:6,i) = cspice_sxform('J2000', frame, ts(i)) * ...
+                                   obj.fm_s{j}(ts(i) - obj.tm_s(j));
+                        break;
+                    end
+                end
+
+                % iterate through piecewise timesteps for clock
+                for j=length(obj.tm_c)-1:-1:1
+                    % first start time that is <= given time, use that and break
+                    if ts(i) >= obj.tm_c(j)
+                        x(7:9,i) = obj.fm_c{j}(ts(i) - obj.tm_c(j));
+                        break;
+                    end
+
+                end
+            end
+        end
+
+        function [meas,var,true] = observemeas(obj,ts,user,opts)
+            %OBSERVEMEAS Finds the real pseudorange and pseudorange-rate
             %(Doppler) measurements at times ts between NavSatellite and
             %the user.
             %   Input:
@@ -331,9 +352,7 @@ classdef NavSatellite < handle
             %    - user; User object instance
             %    - frame; reference frame user data is provided in
             %    - opts; s/c settings struct all fields must be set:
-            %             - x0 (see getnavstates input)
-            %             - P0 (see getnavstates input)
-            %             - cadence (see getmodelstates input)
+            %             - cadence (see generatemodels input)
             %   Output:
             %    - meas; meas.psr is measured pseudorange measurements, 
             %            meas.psrr is doppler measurements
@@ -351,7 +370,10 @@ classdef NavSatellite < handle
 
             n = length(ts);
             % get true measurements
-            [tt, r, dr] = obj.timeofflight(ts, user);
+            % run propagator to get trajectory estimate
+            obj.prop.runat(ts - obj.prop.t0, 'J2000');
+            fref = obj.prop.statetotrajectory();
+            [tt, r, dr] = obj.timeofflight(ts, fref{1}, user);
 
             % Whether it's a PLL or FLL, signal frequency is not observed
             % directly; rather it's measured as a difference of two phases.
@@ -369,49 +391,61 @@ classdef NavSatellite < handle
                 end
 
                 % catch if Tm is too large
-                if Tm > min(ts(2:end)-ts(1:end-1))
-                    error("getmeasurements:invalidSpacing", ...
-                        "User Receiver.Tm must not be greater than minimum spacing between ts.");
+                if ts(1)-Tm < obj.prop.t0 || ts(1)-Tm < obj.clock.t0
+                    error("observemeas:invalidStartMeas", ...
+                        "First measurement must be >= User.rec.Tm past starting epoch.");
                 end
 
-                % interleave times, i.e.
-                % [ts(1)-Tm, ts(1), ts(2)-Tm, ts(2), ts(3)-Tm, ts(3), ... ]
-                tt = [tt - Tm; tt];
-                tt = tt(:)';
-                ts = [ts - Tm; ts];
-                ts = ts(:)';
+                % interleave times
+                tt_old = tt;
+                tt = union(tt_old-Tm, tt_old);
+                it = ismember(tt, tt_old);
+                it_Tm = ismember(tt, tt_old-Tm);
+                ts_old = ts;
+                ts = union(ts_old-Tm, ts_old);
+                is = ismember(ts, ts_old);
+                is_Tm = ismember(ts, ts_old-Tm);
             end
 
             % get user state info for measurements
             xref = obj.getrefstates(tt, 'J2000');
-            xuser = user.getstate(ts, 'J2000');
+            xuser = user.getstates(ts, 'J2000');
             if nargout > 2
-                [xmdl,xprop,Pmdl,Pprop] = obj.getmodelstates(tt, ...
-                        opts.x0, opts.P0, opts.cadence);
+                [xmdl,xprop,Pmdl,Pprop] = obj.generatemodels(tt, opts.cadence);
             else
-                [xmdl,xprop] = obj.getmodelstates(tt, opts.x0, ...
-                        opts.P0, opts.cadence);
+                [xmdl,xprop] = obj.generatemodels(tt, opts.cadence);
             end
 
             if rate
+                % get nav message update intervals as they were assigned in
+                % .generatemodels()
+                mask2 = ones(2,n);
+                I = NavSatellite.getupdateindices(tt,opts.cadence);
+                tI =  tt(union(I(1,:), I(2,:)));
+
                 % un-interleave times
-                n2 = length(tt);
-                tt = tt(2:2:n2);
-                ts = ts(2:2:n2);
+                tt = tt(it);
+                ts = ts(is);
+
+                % with measurement transmit times, compute which need to be
+                % masked based on if they were within Tm of a nav message
+                % update
+                mat = tt - tI';
+                mask2(2,:) = and(mask2(2,:), ~any(and(mat >= 0, mat <= Tm)));
 
                 % separate states
                 % store concatenated data and create 2-page 3D matrices, then
                 % un-interleave data, storing in 2 separate pages of matrix
                 % first tt(i)-Tm comes, then tt(i), so store first value on 
                 % second page and second on first page
-                xref = cat(3, xref(:,2:2:n2), xref(:,1:2:n2));
-                xuser = cat(3, xuser(:,2:2:n2), xuser(:,1:2:n2));
-                xmdl = cat(3, xmdl(:,2:2:n2), xmdl(:,1:2:n2));
-                xprop = cat(3, xprop(:,2:2:n2), xprop(:,1:2:n2));
+                xref = cat(3, xref(:,it), xref(:,it_Tm));
+                xuser = cat(3, xuser(:,is), xuser(:,is_Tm));
+                xmdl = cat(3, xmdl(:,it), xmdl(:,it_Tm));
+                xprop = cat(3, xprop(:,it), xprop(:,it_Tm));
                 % remove tt-Tm data from covariances
                 if nargout > 2
-                    Pmdl = Pmdl(:,:,2:2:n2);
-                    Pprop = Pprop(:,:,2:2:n2);
+                    Pmdl = Pmdl(:,:,it);
+                    Pprop = Pprop(:,:,it);
                 end
             end
 
@@ -481,23 +515,38 @@ classdef NavSatellite < handle
                 end
             end
 
+            % compute link budget and receiver noise
             CN0 = obj.linkbudget(user, r);
-            [erec, vrec] = user.rec.noise(CN0, ts, r, dr);
+            % add mask to link budget %
+            % get nadir direction at each time step
+            nadir = xuser(1:3,:,1) ./ sqrt(sum(xuser(1:3,:,1).^2, 1));
+            % compute angle between nadir and satellite
+            tosat = acos(sum(nadir .* los(:,:,1), 1));
+            % -300 dB/Hz if angle is over off-boresight mask angle
+            CN0 = CN0 - 300 * (tosat > pi/2 - user.ant.mask);
+            [erec, vrec, mask1] = user.rec.noise(CN0, ts, r, dr);
+
+            % build and assign mask
+            if rate
+                meas.mask = and(mask1, mask2);
+            else
+                meas.mask = mask1;
+            end
 
             % assign pseudorange outputs
             err.psr.rec = erec(1,:);
             var.psr.rec = vrec(1,:);
             err.psr.total = err.psr.prop + err.psr.mdl + err.psr.clk + err.psr.rec;
-            true.psr = r;
-            meas.psr = r + err.psr.total;
+            true.psr = r + obj.c * xuser(7,:,1);
+            meas.psr = true.psr + err.psr.total;
 
             if rate
                 % assign pseudorange-rate outputs
                 err.psrr.rec = erec(2,:);
                 var.psrr.rec = vrec(2,:);
                 err.psrr.total = err.psrr.prop + err.psrr.mdl + err.psrr.clk + err.psrr.rec;
-                true.psrr = dr;
-                meas.psrr = dr + err.psrr.total;
+                true.psrr = dr + obj.c * xuser(8,:,1);
+                meas.psrr = true.psrr + err.psrr.total;
             end
 
             true.transmittime = tt;
@@ -510,6 +559,74 @@ classdef NavSatellite < handle
                     var.psrr.total = var.psrr.prop + var.psrr.mdl + var.psrr.clk + var.psrr.rec;
                 end
             end
+        end
+
+        function y = computemeas(obj,t,x,user)
+            %COMPUTEMEAS Computes the ideal pseudorange and Doppler
+            %measurements at time t between the user and NavSatellite
+            %   Input:
+            %    - t; time, seconds past J2000
+            %    - x; state of USER at time t
+            %    - user; User object
+            arguments
+                obj     (1,1)   NavSatellite
+                t       (1,:)   double
+                x       (9,:)   double
+                user    (1,1)   User
+            end
+
+            r_u = x(1:3);           % user position
+            v_u = x(4:6);           % user velocity
+
+            % find transmission time w.r.t meas, based on nav msg knowledge
+            % of satellite states
+            state2eph = @(x) x(1:6,:);
+            modeleph = @(t,~) state2eph(obj.getmodelstates(t));
+            tt = obj.timeofflight(t, modeleph, user);
+            x_s = obj.getmodelstates(tt, user.frame);
+            r_s = x_s(1:3);
+            v_s = x_s(4:6);
+
+            dr = r_s - r_u;         % relative user->sat position
+            dv = v_s - v_u;         % relative user->sat velocity
+            rho = norm(dr);         % scalar range
+            dvdr = dv'*dr;          % dot product of dv and dr
+            y = [rho      + obj.c * (x(7) - x_s(7))
+                 dvdr/rho + obj.c * (x(8) - x_s(8))];
+        end
+
+        function H = measpartials(obj,t,x,user)
+            %MEASPARTIALS Computes the partial derivative of the measurement
+            %model w.r.t. x at the current state.
+            %   Inputs:
+            %    - t; time of measurement
+            %    - x; state of user
+            %    - user; User object
+            arguments
+                obj     (1,1)   NavSatellite
+                t       (1,1)   double
+                x       (9,1)   double
+                user    (1,1)   User
+            end
+
+            r_u = x(1:3);           % user position
+            v_u = x(4:6);           % user velocity
+
+            % find transmission time w.r.t meas, based on nav msg knowledge
+            % of satellite states
+            state2eph = @(x) x(1:6,:);
+            modeleph = @(t,~) state2eph(obj.getmodelstates(t));
+            tt = obj.timeofflight(t, modeleph, user);
+            x_s = obj.getmodelstates(tt, user.frame);
+            r_s = x_s(1:3);
+            v_s = x_s(4:6);
+
+            dr = r_s - r_u;         % relative user->sat position
+            dv = v_s - v_u;         % relative user->sat velocity
+            rho = norm(dr);         % scalar range
+            dvdr = dv'*dr;          % dot product of dv and dr
+            H = [-dr'/rho                     0 0 0    obj.c 0     0
+                  (dr'*dvdr/rho^3 - dv'/rho) -dr'/rho  0     obj.c 0];
         end
 
         function CN0 = linkbudget(obj,user,r)
@@ -534,27 +651,30 @@ classdef NavSatellite < handle
             k = 1.3803e-23;                             % J/K, Boltzmann's constant
             N0 = 10*log10(k * user.ant.Ts);             % dBW/Hz, noise power spectral density
             CN0 = RP + user.ant.Nf + user.ant.L - N0;   % dB*Hz, carrier to noise density ratio
+
         end
 
-        function [tt,r,dr] = timeofflight(obj,ts,user,tol)
+        function [tt,r,dr] = timeofflight(obj,ts,fref,user,tol)
             %TIMEOFFLIGHT Based on the provided receive times, find the
             %satellite transmit time and compute the range / range-rate.
             %   Input:
             %    - ts; eval time steps, seconds past J2000
+            %    - fref; handle to get NavSatellite reference state (valid
+            %            over ts, +/- a couple seconds)
             %    - user; User module
             %    - tol; iteration tolerance for solving transmission time
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
+                fref    (1,1)   function_handle
                 user    (1,1)   User
                 tol     (1,1)   double = 1e-9
             end
 
             n = length(ts);
-            xuser = user.getstate(ts, 'J2000');
-            xref0 = obj.getrefstates(ts, 'J2000');
-            fref = obj.prop.statetotrajectory();
-            fref = fref{1};
+            xuser = user.getstates(ts, 'J2000');
+            xref0 = fref(ts(1), 'J2000');
+
             % initial guess for transmit time is receive time
             tt = ts;
             % instantaneous range at measurement times, in m
@@ -584,7 +704,7 @@ classdef NavSatellite < handle
                     rlast = rj;                 % update iteration
                 end
                 if j == 100
-                    error("timeofflight:notConverged", ...
+                    warning("timeofflight:notConverged", ...
                         "Time %d failed to converge in %d iterations.", i, j);
                 end
                 
@@ -595,6 +715,46 @@ classdef NavSatellite < handle
                 vrel = xref(4:6,i) - xuser(4:6,i);
                 dr(i) = vrel' * los * 1e6;      % convert km/s -> mm/s
             end
+        end
+    end
+
+    methods (Static, Access = private)
+        function I = getupdateindices(ts,cadence)
+            %GETUPDATEINDICES Returns indices of ts where ephemeris and
+            %clock updates should happen, based on cadence.
+            %   Input:
+            %    - ts; eval time steps, seconds past J2000
+            %    - cadence; # of seconds after which models are updated, can be
+            %               separate for ephemeris and clock -- 0 means don't
+            %               update
+            arguments
+                ts      (1,:)   double
+                cadence (1,2)   double {mustBeNonnegative} = zeros(1,2);
+            end
+
+            dt = ts(end) - ts(1);
+            n = length(ts);
+            I = ones(2, ceil(dt / cadence(1)) + 1);
+            if any(cadence)
+                t_prop = ts(1);
+                ii = 2;
+                t_clk = ts(1);
+                jj = 2;
+                for i=2:n
+                    if ts(i) >= t_prop + cadence(1)
+                        I(1,ii) = i;
+                        t_prop = ts(i);
+                        ii = ii + 1;
+                    end
+                    if ts(i) >= t_clk + cadence(end)
+                        I(2,jj) = i;
+                        t_clk = ts(i);
+                        jj = jj + 1;
+                    end
+                end
+            end
+
+            I(:,end) = n;
         end
     end
 
