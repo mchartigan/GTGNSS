@@ -1,2 +1,5 @@
 # MATLAB autosave files
 *.asv
+
+# user SPICE kernel path file
+SPKPATH
