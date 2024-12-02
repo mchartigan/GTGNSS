@@ -1,7 +1,7 @@
 function [R,C,S] = cofloader(fname)
 %COFLOADER Loads nonspherical gravity coefficients from .cof files.
 %   Input:
-%    - filename; path to .gfc file
+%    - filename; path to .cof file
 %   Output:
 %    - 
 arguments

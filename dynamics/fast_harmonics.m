@@ -1,5 +1,5 @@
 function f = fast_harmonics(x, nn, mu, R, C, S)
-%F_HARMONICS compute gravitational acceleration from spherical harmonics 
+%FAST_HARMONICS compute gravitational acceleration from spherical harmonics 
 %of body
 %   Input:
 %    - x; position vector of point (3,) [km]

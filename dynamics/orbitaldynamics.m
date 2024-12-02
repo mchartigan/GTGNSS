@@ -39,7 +39,7 @@ for i=1:length(bodies)
     % %    Fundamentals of Astrodynamics, Vallado, pp.575 8-36
     % f_sec = f_sec - bodies(i).GM * (x_1s - 3*x_13*(x_1s'*x_13)/r_13^2 - 15/2*((x_1s'*x_13)/r_13^2)^2*x_13)/r_13^3;
     % Standard formulation
-    f_sec = f_sec + bodies(i).GM * (x_s3 / r_s3^3 - x_13/r_13^3);
+    f_sec = f_sec + bodies(i).GM * (x_s3/r_s3^3 - x_13/r_13^3);
     % Formulation according to Roy for numerical improvements
     % Q = (r_1s^2 + 2*x_1s'*x_s3) * (r_13^2 + r_13*r_s3 + r_s3^2) / (r_13^3 * r_s3^3 * (r_13 + r_s3));
     % f_sec = f_sec + bodies(i).GM * (x_s3 * Q - x_1s/r_s3^3);
