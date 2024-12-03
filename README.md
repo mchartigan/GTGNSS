@@ -19,7 +19,7 @@ addpath(genpath('path/to/repository'))
 
 For use globally, this line can be added to the end of the user's `startup.m` script -- found in the user's default MATLAB directory.
 
-The script `GTGNSS_setup.m` can be run during first setup to initialize the library for use -- only once is necessary, no need to run on every startup. Currently, this saves the selected absolute path of a common SPICE kernel location so the kernels can be accessed with local paths from within scripts. To run the included examples, contact @mchartigan for a generic subset of SPICE kernels for Earth- and Moon-centered missions; then, the path provided in `GTGNSS_setup` should be the parent directory of these.
+The script `GTGNSS_setup.m` can be run during first setup to initialize the library for use (only once is necessary, no need to run on every startup). Currently, this saves the selected absolute path of a common SPICE kernel location so the kernels can be accessed with local paths from within scripts. To run the included examples, contact @mchartigan for a generic subset of SPICE kernels for Earth- and Moon-centered missions; then, the path provided in `GTGNSS_setup` should be the parent directory of these.
 
 ## Use
 
