@@ -130,7 +130,6 @@ classdef OrbitPropagator < Propagator
                 x       (6,1)   double
             end
 
-            % dxdt = orbitaldynamics(t, x, obj.pri, obj.ord, obj.sec);
             dxdt = zeros(6,1);
             x_1s = x(1:3);
             r_1s = norm(x_1s);
@@ -169,18 +168,45 @@ classdef OrbitPropagator < Propagator
         end
 
         function A = partials(obj,t,x)
-            %PARTIALS Invokes the partials of dynamics, with relevant
-            %settings, for this propagator instance.
+            %PARTIALS Returns the Jacobian of dynamics w.r.t. x (spherical 
+            %harmonics approximated to J2).
             %   Input:
-            %    - t; simulation time in seconds past J2000
-            %    - x; satellite state
+            %    - t; time, seconds past J2000
+            %    - x_; state [pos (km); vel (km/s)] of spacecraft
             arguments
                 obj     (1,1)   OrbitPropagator
                 t       (1,1)   double
                 x       (6,1)   double
             end
-
-            A = orbitalpartials(t, x, obj.pri, obj.sec);
+            
+            x_1s = x(1:3);
+            r_1s = norm(x_1s);
+            J2 = -obj.pri.C(3,1);
+            A = zeros(6,6);
+            
+            A(1:3,4:6) = eye(3);
+            % point mass gravity gradient
+            A(4:6,1:3) = obj.pri.GM * (3*(x_1s*x_1s')/r_1s^5 - 1/r_1s^3 * eye(3));
+            
+            % third-body perturbations
+            for i=1:length(obj.sec)
+                x_si = obj.sec(i).x(t) - x_1s;
+                r_si = norm(x_si);
+                A(4:6,1:3) = A(4:6,1:3) + obj.sec(i).GM * ...
+                             (3*(x_si*x_si')/r_si^5 - 1/r_si^3 * eye(3));
+            end
+            
+            % J2 gravity gradient
+            % x is in J2000, transform to Moon ME to apply this partial
+            T = cspice_pxform('MOON_ME', 'J2000', t);
+            x_1s = T' * x_1s;
+            z = x_1s(3);
+            S = diag([1 1 3]);
+            Q = [1 1 3; 1 1 3; 3 3 3];
+            V1 = (5*z^2-r_1s^2)/r_1s^7 * S - 35*z^2*(x_1s*x_1s')/r_1s^9 + ...
+                 Q .* (5*(x_1s*x_1s')/r_1s^7);
+            % transform the partial back to J2000
+            A(4:6,1:3) = A(4:6,1:3) + T * 3*obj.pri.GM*obj.pri.R^2*J2/2 * V1 * T';
         end
 
         function P = proplyapunov(obj,ts,P0,sv)
@@ -239,9 +265,7 @@ classdef OrbitPropagator < Propagator
                 dt      (1,1)   double {mustBePositive}
                 N       (1,1)   {mustBeNonnegative,mustBeInteger}
             end
-
-            % basis = @(tau) cell2mat(arrayfun(@(x) chebyshevT(0:N_APPX,x), tau, 'UniformOutput', false));
-
+            
             x_init = obj.x0;
 
             % use chebichev nodes for interpolation
@@ -406,7 +430,6 @@ classdef OrbitPropagator < Propagator
             % terms that are too small to matter).
             V(or(isinf(V), isnan(V))) = 0;
             W(or(isinf(W), isnan(W))) = 0;
-
         end
     end
 end
