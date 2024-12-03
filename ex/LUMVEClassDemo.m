@@ -11,7 +11,7 @@ clc, clear, close all;
 %% initialize
 % load SPICE kernels
 spkpath = fileread('SPKPATH');
-cspice_furnsh(strcat(spkpath,'/kernels/generic/mk/generic_earth.tm'));
+cspice_furnsh(strcat(spkpath,'/generic/mk/generic_earth.tm'));
 
 % create simulation starting time
 START = '2024 Nov 7 00:00:00';

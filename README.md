@@ -19,7 +19,11 @@ addpath(genpath('path/to/repository'))
 
 For use globally, this line can be added to the end of the user's `startup.m` script -- found in the user's default MATLAB directory.
 
+The script `GTGNSS_setup.m` can be run during first setup to initialize the library for use -- only once is necessary, no need to run on every startup. Currently, this saves the selected absolute path of a common SPICE kernel location so the kernels can be accessed with local paths from within scripts. To run the included examples, contact @mchartigan for a generic subset of SPICE kernels for Earth- and Moon-centered missions; then, the path provided in `GTGNSS_setup` should be the parent directory of these.
+
 ## Use
+
+Example implementations of various classes are included in the `ex` directory. Some require generic SPICE kernels -- see the [Installation](#installation) section for setup info.
 
 Each subdirectory has modules and/or functions that can assist with orbit propagation or navigation filtering. Each module and function has a header describing the inputs (and outputs, if unclear) required to use each utility. Specific data sources are provided in the `res` directory when applicable, such as spherical harmonic coefficients for the Earth and Moon. For help information, use the command `help function-or-module-name`. If more specificity is needed, use `edit function-or-module-name` and peruse the in-line code documentation.
 

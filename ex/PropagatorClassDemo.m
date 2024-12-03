@@ -10,8 +10,8 @@ clc, clear, close all;
 
 %% load SPICE kernels
 spkpath = fileread('SPKPATH');
-cspice_furnsh(strcat(spkpath,'/kernels/generic/mk/generic_earth.tm'));
-cspice_furnsh(strcat(spkpath,'/kernels/generic/mk/generic_lunar.tm'));
+cspice_furnsh(strcat(spkpath,'/generic/mk/generic_earth.tm'));
+cspice_furnsh(strcat(spkpath,'/generic/mk/generic_lunar.tm'));
 
 %% initialize GPS propagator from Yuma almanac
 % get GPS OE data
@@ -40,7 +40,7 @@ f = 0;
 x_mci = cspice_sxform('MOON_OP', 'J2000', t0) * [r_op; v_op];
 % create propagator for lunar satellite from state in ICRF with 32x32
 % gravity and Earth + sun 3rd body
-lunarprop = LunarPropagator(t0, x_mci, 165, 2);
+lunarprop = LunarPropagator(t0, x_mci, 32, 2);
 
 %% run and plot lunar orbit
 % propagate and get data once/min for 24 hours

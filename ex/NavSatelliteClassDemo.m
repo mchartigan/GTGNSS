@@ -11,7 +11,7 @@ clc, clear, close all;
 %% initialize
 % load SPICE kernels
 spkpath = fileread('SPKPATH');
-cspice_furnsh(strcat(spkpath,'/kernels/generic/mk/generic_lunar.tm'));
+cspice_furnsh(strcat(spkpath,'/generic/mk/generic_lunar.tm'));
 
 % get timing info
 START = '2027 Feb 2 00:00:00';

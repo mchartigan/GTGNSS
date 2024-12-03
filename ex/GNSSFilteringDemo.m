@@ -13,7 +13,7 @@ format long g;          % display long numbers, no scientific notation
 %% initialize
 % load SPICE kernels
 spkpath = fileread('SPKPATH');
-cspice_furnsh(strcat(spkpath,'/kernels/generic/mk/generic_earth.tm'));
+cspice_furnsh(strcat(spkpath,'/generic/mk/generic_earth.tm'));
 
 %% create GNSS satellites (8x8 gravity)
 % get OE data
