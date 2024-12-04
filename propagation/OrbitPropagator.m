@@ -90,7 +90,7 @@ classdef OrbitPropagator < Propagator
             %    - frame; reference frame to return data in
             arguments
                 obj     (1,1)   OrbitPropagator
-                ts      (1,:)   double {mustBeNonnegative}
+                ts      (1,:)   double
                 frame   (1,:)   char
             end
 
