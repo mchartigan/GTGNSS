@@ -17,6 +17,7 @@ classdef LunarPropagator < OrbitPropagator
             %    - x0; starting states -- either array of OE structs, (6,n)
             %          array of starting states (MOON_OP frame), or xopt output
             %          from Conopt(2)
+            %    - ord; maximum degree and order of gravity model to use
             %    - nbods; what secondary bodies to include (1: Earth,
             %            2:+sun, 3:+jupiter)
             %    - opts; optional name-value arg, ODE45 integration tolerances

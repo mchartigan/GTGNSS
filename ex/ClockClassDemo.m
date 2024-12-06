@@ -13,23 +13,12 @@ clc, clear, close all;
 
 %% initialize clock info
 c = 299792458;                          % m/s, speed of light
-% clock info
-% data for Microchip CSAC
-% least-squares fit allan deviation from datasheet to formula
-taus = [1 10 100 1000]';                % intervals for allan deviation
-stds = [3e-10 1e-10 3e-11 1e-11]';      % deviations for different intervals
-a = 9e-10/(30 * 86400);                 % Hz/Hz/s, aging rate a
-adev = c * 1e3 * 3 * stds(2);           % mm/s, 3-sigma stability @ 10s
-% perform least-squares fit to get coefficients of Allan variance formula
-A = [1./taus taus];
-b = stds.^2 - a^2 / 2 * taus.^2;
-coeff = [(A' * A) \ A' * b; a^2 / 2];
-% convert Allan variance coefficients to diffusion coefficients
-[s1, s2, s3] = AllanToDiffCoeff(abs(coeff));
 
 % create Clock instance
-x0Clk = [0 0 a];
-satclock = Clock(0, x0Clk, [s1 s2 s3]); % oscillator propagator
+satclock = Clock(0, [0 0 0], "MicrochipCSAC"); % oscillator propagator
+satclock.x0 = [0 0 satclock.a];
+a = satclock.a;
+adev = c * 1e3 * 3 * satclock.s_allan(2);
 
 %% generate data
 ts = 0:1:3600*2;                        % data once/sec for 2 hours

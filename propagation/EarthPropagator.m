@@ -15,6 +15,7 @@ classdef EarthPropagator < OrbitPropagator
             %    - t0; character string, 'DD-MMM-YYYY XX:XX:XX'
             %    - x0; starting states -- either array of OE structs, (6,n)
             %          or array of starting states (J2000 frame)
+            %    - ord; maximum degree and order of gravity model to use
             %    - nbods; what secondary bodies to include (1:+moon,
             %            2:+sun, 3:+jupiter)
             %    - opts; optional name-value arg, ODE45 integration tolerances
@@ -32,7 +33,7 @@ classdef EarthPropagator < OrbitPropagator
             obj = obj@OrbitPropagator(t0, ord, varargin);
             
             cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
-            [R,C,S,norms] = cofloader("JGM3.cof", true);
+            [R,C,S,norms] = cofloader("JGM3.cof", false);
             
             % planetary info
             bods = getplanets('EARTH', "EARTH", "MOON", "SUN", "JUPITER");
