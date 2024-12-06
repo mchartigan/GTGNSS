@@ -305,31 +305,6 @@ classdef OrbitPropagator < Propagator
             end
         end
 
-        function x = keplertool(obj,ts,x0)
-            %KEPLERTOOL Wrapper for Kepler_universal to handle multiple
-            %time requests.
-            %   Input:
-            %    - ts; states to propagate to by solving Kepler's problem
-            arguments
-                obj (1,1)   OrbitPropagator
-                ts  (1,:)   double
-                x0  (6,:)   double
-            end
-
-            x = zeros(6,length(ts));
-            r0 = x0(1:3);
-            v0 = x0(4:6);
-
-            for i=1:length(ts)
-                try
-                    [rf,vf] = Kepler_universal(r0, v0, ts(i), obj.pri.GM, 1e-10);
-                catch
-                    0;
-                end
-                x(:,i) = [rf; vf];
-            end
-        end
-
         function handles = statetotrajectory(obj)
             %STATETOTRAJECTORY Converts the last propagation to a
             %spline-interpolated trajectory handle.
@@ -430,6 +405,31 @@ classdef OrbitPropagator < Propagator
             % terms that are too small to matter).
             V(or(isinf(V), isnan(V))) = 0;
             W(or(isinf(W), isnan(W))) = 0;
+        end
+
+        function x = keplertool(obj,ts,x0)
+            %KEPLERTOOL Wrapper for Kepler_universal to handle multiple
+            %time requests.
+            %   Input:
+            %    - ts; states to propagate to by solving Kepler's problem
+            arguments
+                obj (1,1)   OrbitPropagator
+                ts  (1,:)   double
+                x0  (6,:)   double
+            end
+
+            x = zeros(6,length(ts));
+            r0 = x0(1:3);
+            v0 = x0(4:6);
+
+            for i=1:length(ts)
+                try
+                    [rf,vf] = Kepler_universal(r0, v0, ts(i), obj.pri.GM, 1e-10);
+                catch
+                    0;
+                end
+                x(:,i) = [rf; vf];
+            end
         end
     end
 end
