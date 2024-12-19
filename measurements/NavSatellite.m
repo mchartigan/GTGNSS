@@ -25,6 +25,8 @@ classdef NavSatellite < handle
         P0      (9,9)   double      % doubles as default navigation info
         xn      (9,:)   double
         Pn      (9,9,:) double
+        % should debug info be printed?
+        DEBUG   (1,1)
     end
 
     properties (Access = private)
@@ -101,6 +103,7 @@ classdef NavSatellite < handle
             end
 
             if ~debug, warning('off', 'NavSatellite:debug'); end
+            obj.DEBUG = debug;
         end
 
         function dxdt = dynamics(obj,t,x)
@@ -205,7 +208,7 @@ classdef NavSatellite < handle
             obj.Pn = Pn;
         end
 
-        function [xm,xp,Pm,Pp] = generatemodels(obj,ts,cadence)
+        function [xm,xp,Pm,Pp,Po] = generatemodels(obj,ts,cadence)
             %GENERATEMODELS Returns model-derived spacecraft states (PVT).
             %This is the information a user would be able to get from data
             %in the nav message. It encompasses ephemeris and clock model
@@ -222,6 +225,7 @@ classdef NavSatellite < handle
             %          becomes 2-page matrix where second page is xp(ts-Tm)
             %    - Pm; covariance of model fit from nav soln
             %    - Pp; covariance of propagation
+            %    - Po; covariance of nav soln at interval start
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
@@ -246,14 +250,15 @@ classdef NavSatellite < handle
             if nargout > 1, xp = zeros(9, n); end
             if nargout > 2, Pm = zeros(9, 9, n); end
             if nargout > 3, Pp = zeros(9, 9, n); end
+            if nargout > 4, Po = zeros(9, 9, n); end
 
             for i=1:size(I, 2)-1        % for orbit
-                obj.prop.t0 = ts(I(1,i));               % new start time
-                obj.prop.x0 = xnav(1:6, I(1,i));        % new start state
-                tf = ts(I(1,i+1)) - obj.prop.t0;        % end of validity interval
+                int = I(1,i):I(1,i+1);                  % validity interval indices
+                obj.prop.t0 = ts(int(1));               % new start time
+                obj.prop.x0 = xnav(1:6, int(1));        % new start state
+                tf = ts(int(end)) - obj.prop.t0;        % end of validity interval
                 % ephemeris model, store in cell array
                 obj.fm_s{i} = obj.prop.modelfit("Kepler", tf, 12);
-                int = I(1,i):I(1,i+1);                  % validity interval indices
                 % assign model states relative to interval start
                 xm(1:6,int) = obj.fm_s{i}(ts(int) - ts(int(1)));
 
@@ -272,14 +277,18 @@ classdef NavSatellite < handle
                     Pp(1:6,1:6,int) = ...
                         obj.prop.proplyapunov(ts(int), Pnav(1:6,1:6,int(1)));
                 end
+                if nargout > 4
+                    % determine error due to initial OD
+                    Po(1:6,1:6,int) = repmat(Pnav(1:6,1:6,int(1)), 1, 1, length(int));
+                end
             end
 
             for i=1:size(I, 2)-1        % for clock
-                obj.clock.t0 = ts(I(2,i));              % new start time
-                obj.clock.x0 = xnav(7:9, I(2,i));       % new start state
+                int = I(2,i):I(2,i+1);                  % validity interval indices
+                obj.clock.t0 = ts(int(1));              % new start time
+                obj.clock.x0 = xnav(7:9, int(1));       % new start state
                 % clock model, store in cell array
                 obj.fm_c{i} = obj.clock.modelfit();          
-                int = I(2,i):I(2,i+1);                  % validity interval indices
                 % assign model states relative to interval start
                 xm(7:9,int) = obj.fm_c{i}(ts(int) - ts(int(1)));     
 
@@ -291,6 +300,10 @@ classdef NavSatellite < handle
                     % propagate nav uncertainty while model is valid
                     Pp(7:9,7:9,int) = ...
                         obj.clock.proplyapunov(ts(int), Pnav(7:9,7:9,int(1)));
+                end
+                if nargout > 4
+                    % determine error due to initial OD
+                    Po(7:9,7:9,int) = repmat(Pnav(7:9,7:9,int(1)), 1, 1, length(int));
                 end
             end
 
@@ -470,19 +483,17 @@ classdef NavSatellite < handle
                 err.psr.mdl(i) = err_mdl(1:3,i,1)' * los(:,i,1) * psr_units;
 
                 if rate         % range-rate measurements capable
-                    err.psrr.prop(i) = (err_prop(1:3,i,1)'*los(:,i,1) - ...
-                        err_prop(1:3,i,2)'*los(:,i,2)) / Tm * psrr_units;
-                    err.psrr.mdl(i) = (err_mdl(1:3,i,1)'*los(:,i,1) - ...
-                        err_mdl(1:3,i,2)'*los(:,i,2)) / Tm * psrr_units;
+                    err.psrr.prop(i) = err_prop(4:6,i,1)'*los(:,i,1) * psrr_units;
+                    err.psrr.mdl(i) = err_mdl(4:6,i,1)'*los(:,i,1) * psrr_units;
                 end
             end
             % pseudorange error from clock model
             err.psr.clk = (err_mdl(7,:,1) + err_prop(7,:,1)) * obj.c;       % s to m
             % velocity error from clock model
             if rate     % receiver is capable of measuring rate
-                err.psrr.clk = ((err_mdl(8,:,1) + err_prop(8,:,1)) + ...
-                    (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
-                    err_prop(7,:,1)-err_prop(7,:,2)) / Tm) * obj.c * 1e3;   % s/s to mm/s
+                err.psrr.clk = (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
+                    err_prop(7,:,1)-err_prop(7,:,2)) / Tm * obj.c * 1e3;    % s/s to mm/s
+                % err.psrr.clk = ((err_mdl(8,:,1) + err_prop(8,:,1))) * obj.c * 1e3;   % s/s to mm/s
             end
 
             if nargout > 2
@@ -492,13 +503,22 @@ classdef NavSatellite < handle
                 var.psrr.prop = zeros(1,n);     % Doppler uncertainty from nav
                 var.psrr.mdl = zeros(1,n);      % Doppler uncertainty from model
                 for i=1:n
-                    var.psr.prop(i) = los(:,i,1)' * Pprop(1:3,1:3,i) * los(:,i,1) * psr_units^2;    % m^2
-                    var.psr.mdl(i) = los(:,i,1)' * Pmdl(1:3,1:3,i) * los(:,i,1) * psr_units^2;      % m^2
-                    var.psrr.prop(i) = los(:,i,1)' * Pprop(4:6,4:6,i) * los(:,i,1) * psrr_units^2;  % mm^2/s^2
-                    var.psrr.mdl(i) = los(:,i,1)' * Pmdl(4:6,4:6,i) * los(:,i,1) * psrr_units^2;    % mm^2/s^2
+                    % pseudorange uncertainty from ephemeris, in m^2
+                    var.psr.prop(i) = los(:,i,1)' * Pprop(1:3,1:3,i) * los(:,i,1) * psr_units^2;
+                    var.psr.mdl(i) = los(:,i,1)' * Pmdl(1:3,1:3,i) * los(:,i,1) * psr_units^2;
+
+                    if rate
+                        % Doppler uncertainty from ephemeris, in mm^2/s^2
+                        var.psrr.prop(i) = los(:,i,1)' * Pprop(4:6,4:6,i) * los(:,i,1) * psrr_units^2;
+                        var.psrr.mdl(i) = los(:,i,1)' * Pmdl(4:6,4:6,i) * los(:,i,1) * psrr_units^2;
+                    end
                 end
-                % pseudorange uncertainty from clock model
-                var.psr.clk = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;               % m^2
+                % pseudorange uncertainty from clock model, in m^2
+                var.psr.clk_offset = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;
+                % implement phase noise here if ya want
+                var.psr.clk_stability = zeros(size(var.psr.clk_offset));
+                var.psr.clk = var.psr.clk_offset + var.psr.clk_stability;
+
                 % velocity uncertainty from clock model
                 % Added frequency offset error as well!! We trust the LNSS
                 % sats so when a receiver is comparing frequencies, it'll
@@ -509,9 +529,10 @@ classdef NavSatellite < handle
                 % directly attempting to measure the frequency that noise
                 % is applied to our estimates + the offset!
                 if rate
-                    temp = obj.clock.dtcovariance(Tm);
-                    var.psrr.clk = (reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) + ...
-                        ones(1,n) * temp(1,1) / Tm^2) * (obj.c * 1e3)^2;    % mm^2/s^2
+                    % Doppler uncertainty from s/c clock, in mm^2/s^2
+                    var.psrr.clk_offset = reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) * (obj.c * 1e3)^2;
+                    var.psrr.clk_stability = ones(1,n) * obj.clock.stability(Tm) * (obj.c * 1e3)^2;
+                    var.psrr.clk = var.psrr.clk_offset + var.psrr.clk_stability;
                 end
             end
 
@@ -533,9 +554,24 @@ classdef NavSatellite < handle
                 meas.mask = mask1;
             end
 
+            % plot CN0 for simulation
+            if obj.DEBUG
+                figure();
+                plotformat("APA", 0.25, "scaling", 1, "coloring", "science");
+                elev = (pi/2 - tosat) * 180/pi;
+                plot(elev(meas.mask(1,:)), CN0(meas.mask(1,:)), "LineWidth", 2);
+                grid on;
+                xlabel("Elevation angle (\circ)");
+                ylabel("C/N0 (dB-Hz)");
+                title("C/N0 vs. User Antenna Elevation Angle");
+            end
+
             % assign pseudorange outputs
             err.psr.rec = erec(1,:);
-            var.psr.rec = vrec(1,:);
+            var.psr.rec_thermal = vrec.thermal(1,:);
+            var.psr.rec_clk = vrec.clk(1,:);
+            var.psr.rec_dyn = vrec.dyn(1,:);
+            var.psr.rec = vrec.total(1,:);
             err.psr.total = err.psr.prop + err.psr.mdl + err.psr.clk + err.psr.rec;
             true.psr = r + obj.c * xuser(7,:,1);
             meas.psr = true.psr + err.psr.total;
@@ -543,7 +579,10 @@ classdef NavSatellite < handle
             if rate
                 % assign pseudorange-rate outputs
                 err.psrr.rec = erec(2,:);
-                var.psrr.rec = vrec(2,:);
+                var.psrr.rec_thermal = vrec.thermal(2,:);
+                var.psrr.rec_clk = vrec.clk(2,:);
+                var.psrr.rec_dyn = vrec.dyn(2,:);
+                var.psrr.rec = vrec.total(2,:);
                 err.psrr.total = err.psrr.prop + err.psrr.mdl + err.psrr.clk + err.psrr.rec;
                 true.psrr = dr + obj.c * xuser(8,:,1);
                 meas.psrr = true.psrr + err.psrr.total;

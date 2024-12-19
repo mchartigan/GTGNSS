@@ -18,7 +18,7 @@ b = (stds.^2 - a^2 / 2 * taus.^2) / nrm;
 opts = fitoptions('Method', 'LinearLeastSquares', ...
     'Lower', [0 0], 'Robust', 'off');
 type = fittype({'1/x', 'x'}, 'options', opts);
-[curve, ~] = fit(taus, b, type);
+[curve, gof] = fit(taus, b, type);
 B = [coeffvalues(curve) * nrm a^2/2]';
 end
 
