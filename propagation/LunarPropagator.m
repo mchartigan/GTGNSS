@@ -43,7 +43,7 @@ classdef LunarPropagator < OrbitPropagator
             bods(1).C = C;                  % store in moon struct for orbitaldynamics
             bods(1).S = S;                  % store in moon struct for orbitaldynamics
             bods(1).norms = norms;          % store in moon struct for orbitaldynamics
-            bods(1).frame = 'MOON_ME';      % body-fixed frame of coefficients
+            bods(1).frame = 'MOON_PA';      % body-fixed frame of coefficients
             obj.pri = bods(1);              % primary body
             obj.sec = bods(2:nbods+1);      % secondary bodies
 
@@ -107,7 +107,7 @@ classdef LunarPropagator < OrbitPropagator
             end
 
             % % not supported utility
-            % plotformat("IEEE", 1, "scaling", 2, "coloring", "science");
+            % plotformat("APA", 1, "coloring", "science");
             plotLunarOrbit(obj.ts, permute(data, [2,1,3]), frame, "Satellite trajectories");
         end
 
