@@ -12,13 +12,15 @@
 clc, clear, close all;
 
 %% initialize clock info
-c = 299792458;                          % m/s, speed of light
+c = 299792458;                              % m/s, speed of light
 
 % create Clock instance
-satclock = Clock(0, [0 0 0], "MicrochipCSAC"); % oscillator propagator
-satclock.x0 = [0 0 satclock.a];
-a = satclock.a;
-adev = c * 1e3 * 3 * satclock.s_allan(2);
+clk = Clock(0, [0 0 0], "SafranMiniRAFS");  % oscillator propagator
+% set starting state again since now we've gotten the aging rate
+clk.x0 = [0 0 clk.a];
+a = clk.a;
+% compute the 3-sigma allan deviation (in mm/s) @10s
+adev = c * 1e3 * 3 * clk.s_allan(2);
 
 %% generate data
 ts = 0:1:3600*2;                        % data once/sec for 2 hours

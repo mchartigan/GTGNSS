@@ -10,7 +10,7 @@ classdef Clock < Propagator
     properties
         t0                              % sim start time, seconds past J2000
         x0                              % sim start state
-        var     (3,3)   double          % variance of clock noise
+        Q       (3,3)   double          % process noise of clock
         dim             = 3             % dimension of state
         % info stored from latest run (if ts = [], no run yet)
         ts
@@ -24,10 +24,12 @@ classdef Clock < Propagator
     end
     properties (SetAccess = private)
         % fundamental oscillator-specific info
+        type    (1,:)   {mustBeText} = "Allan"          % fit type
+        R2      (1,1)   double                          % R-squared value
         f       (1,1)   double {mustBePositive} = 1     % oscillator frequency, Hz
         a       (1,1)   double = 0                      % aging rate, s/s/s
-        t_allan (1,:)   double {mustBePositive} = []    % Allan deviation intervals, s
-        s_allan (1,:)   double {mustBePositive} = []    % Allan deviations, s/s
+        t_allan (:,1)   double {mustBePositive} = []    % Allan deviation intervals, s
+        s_allan (:,1)   double {mustBePositive} = []    % Allan deviations, s/s
         f_noise (1,:)   double {mustBePositive} = []    % phase noise frequency offsets, Hz
         n_noise (1,:)   double = []                     % phase noise, dBc/Hz
     end
@@ -36,12 +38,12 @@ classdef Clock < Propagator
     end
     
     methods
-        function obj = Clock(t0,x0,type,varargin)
+        function obj = Clock(t0,x0,name,varargin)
             %CLOCK Construct an oscillator/clock instance.
             %   Inputs:
             %    - t0; starting time in seconds past J2000
             %    - x0; starting state, [bias (s); drift (s/s); aging (1/s)]
-            %    - type; string, see Clock.assignclockdata() for options
+            %    - name; string, see Clock.assignclockdata() for options
             %    - debug; optional name-value pair (default false), print debug
             %             output
             %    - fit; optional name-value pair (default "Allan"), model
@@ -49,7 +51,7 @@ classdef Clock < Propagator
             arguments
                 t0      (1,1)   double
                 x0      (3,1)   double
-                type    (1,:)   {mustBeText}
+                name    (1,:)   {mustBeText}
             end
             arguments (Repeating)
                 varargin
@@ -58,14 +60,14 @@ classdef Clock < Propagator
             obj.t0 = t0;
             obj.x0 = x0;
             obj.DEBUG = false;
-            fit = "Allan";
+            obj.type = "Allan";
 
             if nargin > 3
                 for i=1:2:nargin-3
                     if strcmp(varargin{i}, "debug")
                         obj.DEBUG = varargin{i+1};
                     elseif strcmp(varargin{i}, "fit")
-                        fit = varargin{i+1};
+                        obj.type = varargin{i+1};
                     end
                 end
             elseif nargin < 3
@@ -73,14 +75,14 @@ classdef Clock < Propagator
             end
 
             % parse clock type
-            if ~isa(type, 'string')
+            if ~isa(name, 'string')
                 error("Clock:invalidType", "Clock type must either be string.");
             end
 
-            if strcmpi(type, "none")    % no clock (default initialization)
+            if strcmpi(name, "none")    % no clock (default initialization)
                 return
             else                        % get from supported clocks
-                obj.assignclockdata(type, fit);
+                obj.assignclockdata(name);
             end
 
             obj.seed = randi([1 1e9]);
@@ -164,7 +166,7 @@ classdef Clock < Propagator
             
             % reshape starting P to correct format
             P0 = reshape(P0, obj.dim*obj.dim, 1) * obj.c^4;
-            [~,Y] = ode45(@(t,p) obj.lyapunov(p, Clock.partials(t,obj.x0), obj.var * obj.c^4), ...
+            [~,Y] = ode45(@(t,p) obj.lyapunov(p, Clock.partials(t,obj.x0), obj.Q * obj.c^4), ...
                           ts, P0, odeset("RelTol", 1e-9, "AbsTol", 1e-11));
 
             % store covariance matrices in appropriate structure
@@ -175,9 +177,31 @@ classdef Clock < Propagator
             P = P ./ obj.c^4;
         end
 
+        function s = stability(obj,dt)
+            %STABILITY Returns the short-term stability of the oscillator
+            %at the given measurement interval. Either Allan or Hadamard
+            %variance(! not deviation), in (s/s)^2.
+            %   Input:
+            %    - dt; measurement interval in s
+            arguments
+                obj (1,1)   Clock
+                dt  (1,:)   double {mustBePositive}
+            end
+
+            if strcmpi(obj.type, "Allan")
+                s = obj.Q(1,1)./dt + obj.Q(2,2)*dt/3 + dt.^2/2 * obj.a^2;
+            elseif strcmpi(obj.type, "Hadamard")
+                s = obj.Q(1,1)./dt + obj.Q(2,2)*dt/6 + 11/120*obj.Q(3,3)*dt.^3;
+            elseif strcmpi(obj.type, "constant")
+                s = obj.s_allan^2;
+            else
+                error("stability:invalidFit", "Not sure how you got here really...");
+            end
+        end
+
         function Q = dtcovariance(obj,dt)
             %DTCOVARIANCE Returns the discrete-time covariance associated
-            %w/ the Wiener processes (obj.var) is the continuous-time
+            %w/ the Wiener processes (obj.Q) is the continuous-time
             %coviarance.
             %   Input:
             %    - dt; time step
@@ -186,16 +210,16 @@ classdef Clock < Propagator
                 dt  (1,1)   double {mustBePositive}
             end
 
-            v1 = obj.var(1,1);
-            v2 = obj.var(2,2);
-            v3 = obj.var(3,3);
+            v1 = obj.Q(1,1);
+            v2 = obj.Q(2,2);
+            v3 = obj.Q(3,3);
 
             Q = [v1*dt + v2/3*dt^3 + v3/20*dt^5 v2/2*dt^2 + v3/8*dt^4 v3/6*dt^3;
                  v2/2*dt^2 + v3/8*dt^4          v2*dt + v3/3*dt^3     v3/2*dt^2;
                  v3/6*dt^3                      v3/2*dt^2             v3*dt   ];
         end
 
-        function assignclockdata(obj,name,fit)
+        function assignclockdata(obj,name)
             %ASSIGNCLOCKDATA Sets a number of object properties based on
             %the name of a given oscillator, accessing data from JSON.
             %   Choose oscillator from list: "MicrochipCSAC", "MicrochipMAC",
@@ -204,12 +228,9 @@ classdef Clock < Propagator
             %
             %   Input:
             %    - name; string name of oscillator (must match file exactly)
-            %    - fit; optional, model to fit. Either "Allan" (default) or 
-            %           "Hadamard"
             arguments
                 obj     (1,1)   Clock
                 name    (1,:)   {mustBeText}
-                fit     (1,:)   {mustBeText} = "Allan"
             end
 
             fname = name + ".json";
@@ -221,43 +242,98 @@ classdef Clock < Propagator
                     "File %s could not be found.", fname);
             end
 
+            % assign data from JSON file
             obj.f = data.frequency;
             obj.a = data.aging / 86400;     % convert s/s/day -> s/s/s
-            obj.t_allan = data.stability.int;
-            obj.s_allan = data.stability.dev;
+            obj.t_allan = data.stability.int';
+            obj.s_allan = data.stability.dev';
             obj.f_noise = data.phase_noise.freq;
             obj.n_noise = data.phase_noise.noise;
 
-            if strcmpi(fit, "Allan")
-                B = stability2allan(obj.t_allan, obj.s_allan, obj.a);
-                coeff = allan2diffcoeff(B);
-            elseif strcmpi(fit, "Hadamard")
-                B = stability2hadamard(obj.t_allan, obj.s_allan);
-                coeff = hadamard2diffcoeff(B);
+            % organize variables for fitting process
+            taus = obj.t_allan;
+            stds = obj.s_allan;
+            nrm = stds(end)^2;
+
+            if strcmpi(obj.type, "Allan")
+                % organize coefficients to solve Allan variance equation
+                b = (stds.^2 - obj.a^2 / 2 * taus.^2) / nrm;
+                
+                % perform constrained linear least squares fit to Allan
+                % variance equation
+                opts = fitoptions('Method', 'LinearLeastSquares', ...
+                    'Lower', [0 0], 'Robust', 'off');
+                ftype = fittype({'1/x', 'x'}, 'options', opts);
+                [curve, gof] = fit(taus, b, ftype);
+                
+                % convert and assign coefficients
+                B = [coeffvalues(curve) * nrm obj.a^2/2]';
+                s1 = sqrt(B(1));                % diffusion coefficient of white noise
+                s2 = sqrt(3 * B(2));            % ^ of random walk frequency noise
+                s3 = 0;                         % set to zero (aging rate is constant)
+
+            elseif strcmpi(obj.type, "Hadamard")
+                % organize coefficients to solve Hadamard variance equation
+                b = stds.^2 / nrm;
+                
+                % perform constrained linear least squares fit to Hadamard
+                % variance equation
+                opts = fitoptions('Method', 'LinearLeastSquares', ...
+                    'Lower', [0 0 0], 'Robust', 'off');
+                ftype = fittype({'1/x', 'x', 'x^3'}, 'options', opts);
+                [curve, gof] = fit(taus, b, ftype);
+
+                % convert and assign coefficients
+                B = coeffvalues(curve)' * nrm;
+                s1 = sqrt(B(1));                % diffusion coefficient of white noise
+                s2 = sqrt(B(2) * 6);            % ^ of random walk frequency noise
+                s3 = sqrt(120 * B(3) / 11);     % set to zero (aging rate is constant)
+
+            elseif strcmpi(obj.type, "constant")
+                s1 = 0;
+                s2 = 0;
+                s3 = 0;
+                gof.sse = 0;
+
             else
-                error("assignclockdata:invalidFit", ...
-                    "%s not found, valid fit options found in documentation.", fit);
+                error("stability2diffcoeff:invalidFit", ...
+                    "%s not found, valid fit options found in documentation.", obj.type);
             end
 
-            obj.var = diag(coeff.^2);
-            
+            obj.R2 = gof.rsquare;           % summary statistic of fit quality
+            obj.Q = diag([s1 s2 s3].^2);    % coefficients into process noise
+
             if obj.DEBUG
                 % plot short-term stability fit to check quality
                 ta = obj.t_allan(1):obj.t_allan(end);
-                if strcmpi(fit, "Allan")
+
+                if strcmpi(name, "AccubeatUSO")
+                    data2 = jsondecode(fileread("AltAccubeatUSO.json"));
+                    t2 = data2.stability.int';
+                    s2 = data2.stability.dev';
+                    ta = t2(1):t2(end);
+                end
+                if strcmpi(obj.type, "Allan")
                     sa = sqrt(B(1) ./ ta + B(2) .* ta + obj.a^2/2 * ta .^ 2);
                 else
                     sa = sqrt(B(1) ./ ta + B(2) * ta + B(3) * ta .^ 3);
                 end
+
+                entries = ["Model", "Data"];
             
                 figure();
                 loglog(ta, sa);
                 hold on;
                 scatter(obj.t_allan, obj.s_allan, 100, "rx");
+                if strcmpi(name, "AccubeatUSO")
+                    scatter(t2, s2, 50, "k*");
+                    entries = ["Model", "Specified Data", "Sample Clock from Datasheet"];
+                end
+                hold off; grid on;
                 xlabel("Interval (s)");
                 ylabel("\sigma_Y(\tau)");
-                title(sprintf("%s %s deviation fit", name, fit));
-                legend(["Model", "Data"]);
+                title(sprintf("%s %s deviation fit", name, obj.type));
+                legend(entries);
             end
         end
 
@@ -309,6 +385,86 @@ classdef Clock < Propagator
             fx = @(tau) [C(1) + (tau)*C(2) + (tau).^2/2*C(3); ...
                        C(2) + (tau)*C(3); ...
                        ones(size(tau))*C(3)];
+        end
+
+        function stability2diffcoeff(obj)
+            %STABILITY2DIFFCOEFF Converts short-term stability data
+            %(pre-loaded into instance properties) to diffusion
+            %coefficients, stored in obj.Q.
+            arguments
+                obj (1,1)   Clock
+            end
+
+            taus = obj.t_allan;
+            stds = obj.s_allan;
+            nrm = stds(end)^2;
+
+            if strcmpi(obj.type, "Allan")
+                % organize coefficients to solve Allan variance equation
+                b = (stds.^2 - obj.a^2 / 2 * taus.^2) / nrm;
+                
+                % perform constrained linear least squares fit to Allan
+                % variance equation
+                opts = fitoptions('Method', 'LinearLeastSquares', ...
+                    'Lower', [0 0], 'Robust', 'off');
+                ftype = fittype({'1/x', 'x'}, 'options', opts);
+                [curve, gof] = fit(taus, b, ftype);
+                
+                % convert and assign coefficients
+                B = [coeffvalues(curve) * nrm obj.a^2/2]';
+                s1 = sqrt(B(1));                % diffusion coefficient of white noise
+                s2 = sqrt(3 * B(2));            % ^ of random walk frequency noise
+                s3 = 0;                         % set to zero (aging rate is constant)
+
+            elseif strcmpi(obj.type, "Hadamard")
+                % organize coefficients to solve Hadamard variance equation
+                b = stds.^2 / nrm;
+                
+                % perform constrained linear least squares fit to Hadamard
+                % variance equation
+                opts = fitoptions('Method', 'LinearLeastSquares', ...
+                    'Lower', [0 0 0], 'Robust', 'off');
+                ftype = fittype({'1/x', 'x', 'x^3'}, 'options', opts);
+                [curve, gof] = fit(taus, b, ftype);
+
+                % convert and assign coefficients
+                B = coeffvalues(curve)' * nrm;
+                s1 = sqrt(B(1));                % diffusion coefficient of white noise
+                s2 = sqrt(B(2) * 6);            % ^ of random walk frequency noise
+                s3 = sqrt(120 * B(3) / 11);     % set to zero (aging rate is constant)
+
+            elseif strcmpi(obj.type, "constant")
+                s1 = 0;
+                s2 = 0;
+                s3 = 0;
+                gof.sse = 0;
+
+            else
+                error("stability2diffcoeff:invalidFit", ...
+                    "%s not found, valid fit options found in documentation.", obj.type);
+            end
+
+            obj.R2 = gof.rsquare;           % summary statistic of fit quality
+            obj.Q = diag([s1 s2 s3].^2);    % coefficients into process noise
+
+            if obj.DEBUG
+                % plot short-term stability fit to check quality
+                ta = obj.t_allan(1):obj.t_allan(end);
+                if strcmpi(obj.type, "Allan")
+                    sa = sqrt(B(1) ./ ta + B(2) .* ta + obj.a^2/2 * ta .^ 2);
+                else
+                    sa = sqrt(B(1) ./ ta + B(2) * ta + B(3) * ta .^ 3);
+                end
+            
+                figure();
+                loglog(ta, sa);
+                hold on;
+                scatter(obj.t_allan, obj.s_allan, 100, "rx");
+                xlabel("Interval (s)");
+                ylabel("\sigma_Y(\tau)");
+                title(sprintf("%s %s deviation fit", name, obj.type));
+                legend(["Model", "Data"]);
+            end
         end
     end
 

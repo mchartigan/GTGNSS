@@ -24,6 +24,26 @@ classdef OrbitPropagator < Propagator
         ts
         xs
         frame   (1,:)   char = ''
+
+        % solar radiation pressure variables %
+        % coefficient of reflectivity
+        Cr      (1,1)   double {mustBeNonnegative} = 1
+        % SRP area-to-mass ratio
+        Am      (1,1)   double {mustBeNonnegative} = 0
+    end
+    properties (Constant, Access=private)
+        % solar radiation pressure constants %
+        % kN/m^2 (Pa), solar radiation pressure at Earth, given by the solar
+        % constant at Earth (W/m^2) divided by the speed of light (m/s)
+        Ps = 1361/299792458 * 1e-3
+        % km, 1 astronomical unit (average Earth-sun distance)
+        AU = 149597870.700
+        % km, radius of the sun
+        Rs = 695700
+        % km, radius of the Earth
+        Re = 6378.1366
+        % km, radius of the moon
+        Rm = 1737.4
     end
     
     methods
@@ -33,6 +53,10 @@ classdef OrbitPropagator < Propagator
             %    - t0; character string, 'DD-MMM-YYYY XX:XX:XX'
             %    - ord; maximum degree and order of gravity model to use
             %    - opts; optional name-value arg, ODE45 integration tolerances
+            %    - Cr; optional name-value arg, coefficient of reflectivity
+            %          for computing solar radiation pressure
+            %    - A/m; optional name-value arg, area-to-mass ratio for
+            %           computing solar radiation pressure
             arguments
                 t0      (1,:)
                 ord     (1,1)   {mustBeInteger,mustBePositive}
@@ -45,11 +69,20 @@ classdef OrbitPropagator < Propagator
             obj.ord = ord;
             obj.opts = odeset("RelTol", 1e-9, "AbsTol", 1e-11);
             default = 2;
+            varargin = varargin{1};
 
             if nargin > default
-                for i=1:2:nargin-default
+                for i=1:2:length(varargin)
                     if strcmp(varargin{i}, "opts")
                         obj.opts = varargin{i+1};
+                    elseif strcmp(varargin{i}, "Cr")
+                        obj.Cr = varargin{i+1};
+                    elseif strcmp(varargin{i}, "A/m")
+                        obj.Am = varargin{i+1};
+                    elseif ~isempty(varargin)
+                        error("OrbitPropagator:invalidArgument", ...
+                            "%s is not a valid optional argument.", ...
+                            convertCharsToStrings(varargin{i}));
                     end
                 end
             elseif nargin < default
@@ -99,7 +132,7 @@ classdef OrbitPropagator < Propagator
             xs = zeros(6,n,obj.nsats);
             
             for i=1:obj.nsats
-                [~,X] = ode45(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
+                [~,X] = ode89(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
                 X = X(2:end,:)';
                 for j=1:length(ts)
                     X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
@@ -162,6 +195,61 @@ classdef OrbitPropagator < Propagator
             f_d = 0;
             % compute SRP
             f_SRP = 0;
+            if obj.Am > 0
+                x_1sun = cspice_spkpos('SUN', t, 'J2000', 'NONE', obj.pri.name);
+                x_ssun = x_1sun - x_1s;
+                r_ssun = norm(x_ssun);
+                x_1e = cspice_spkpos('EARTH', t, 'J2000', 'NONE', obj.pri.name);
+                x_se = x_1e - x_1s;
+                r_se = norm(x_se);
+                x_1m = cspice_spkpos('MOON', t, 'J2000', 'NONE', obj.pri.name);
+                x_sm = x_1m - x_1s;
+                r_sm = norm(x_sm);
+
+                % determine shadown conditions
+                a = asin(obj.Rs/r_ssun);        % apparent radius of sun
+                b1 = asin(obj.Re/r_se);         % apparent radius of earth
+                b2 = asin(obj.Rm/r_sm);         % apparent radius of moon
+                % apparent separation of body centers
+                c1 = acos(x_se' * x_ssun / (r_se * r_ssun));
+                c2 = acos(x_sm' * x_ssun / (r_sm * r_ssun));
+
+                % handle the earth
+                if a + b1 <= c1
+                    v1 = 1;
+                elseif c1 < abs(b1 - a)
+                    v1 = 0;
+                else
+                    % intermediates
+                    x1 = (c1^2 + a^2 - b1^2) / (2*c1);
+                    y1 = sqrt(a^2 - x1^2);
+                    % area
+                    A1 = a^2 * acos(x1/a) + b1^2 * acos((c1-x1)/b1) - c1*y1;
+                    % fraction of sunlight left
+                    v1 = 1 - A1 / (pi*a^2);
+                end
+                % handle the moon
+                if a + b2 <= c2
+                    v2 = 1;
+                elseif c2 < abs(b2 - a)
+                    v2 = 0;
+                else
+                    % intermediates
+                    x2 = (c2^2 + a^2 - b2^2) / (2*c2);
+                    y2 = sqrt(a^2 - x2^2);
+                    % area
+                    A2 = a^2 * acos(x2/a) + b2^2 * acos((c2-x2)/b2) - c2*y2;
+                    % fraction of sunlight left
+                    v2 = 1 - A2 / (pi*a^2);
+                end
+
+                v = min(v1,v2);     % find maximum occultation
+
+                % assume surface normal points in the direction of the sun
+                % (reasonable if solar panels point towards it, which they
+                % normally do)
+                f_SRP = -v*obj.Ps*obj.Cr*obj.Am*obj.AU^2 * x_ssun/r_ssun^3;
+            end
             
             dxdt(1:3) = x(4:6);
             dxdt(4:6) = f_ns + f_sec + f_d + f_SRP;
@@ -211,7 +299,7 @@ classdef OrbitPropagator < Propagator
 
         function P = proplyapunov(obj,ts,P0,sv)
             %PROPLYAPUNOV Propagates Lyapunov equations (obj.lyapunov) from
-            %given to next time and provides covariance matrices. This
+            %given to next time and provides covariance matrices.
             %   Input
             %    - ts; propagation times, seconds past J2000
             %    - P0; covariance of state x0
@@ -230,6 +318,8 @@ classdef OrbitPropagator < Propagator
                     "sv must be 1 < sv < obj.nsats.");
             end
 
+            ts = ts + obj.t0;
+
             n = length(ts);
             P = zeros(obj.dim, obj.dim, n);
             
@@ -239,7 +329,7 @@ classdef OrbitPropagator < Propagator
             % requires the current state.
             jointdyn = @(t,x) [obj.dynamics(t, x(1:6)); ...
                 obj.lyapunov(x(7:end), obj.partials(t,x(1:6)), 0)];
-            [~,Y] = ode45(jointdyn, ts, [obj.x0(:,sv); P0], obj.opts);
+            [~,Y] = ode89(jointdyn, ts, [obj.x0(:,sv); P0], obj.opts);
 
             % store covariance matrices in appropriate structure
             for i=1:length(ts)

@@ -8,7 +8,7 @@ classdef User < handle
         % reference frame for user trajectory
         frame   (1,:)   {mustBeText} = 'J2000'
         % receiver
-        rec     (1,1)   Receiver = Receiver("none")
+        rec     (1,1)   Receiver = Receiver(Clock(0,zeros(3,1),"none"),"none")
         % receiver antenna
         ant     (1,1)   ReceiveAntenna
     end
