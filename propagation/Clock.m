@@ -296,7 +296,7 @@ classdef Clock < Propagator
                 gof.sse = 0;
 
             else
-                error("stability2diffcoeff:invalidFit", ...
+                error("assignclockdata:invalidFit", ...
                     "%s not found, valid fit options found in documentation.", obj.type);
             end
 
@@ -385,86 +385,6 @@ classdef Clock < Propagator
             fx = @(tau) [C(1) + (tau)*C(2) + (tau).^2/2*C(3); ...
                        C(2) + (tau)*C(3); ...
                        ones(size(tau))*C(3)];
-        end
-
-        function stability2diffcoeff(obj)
-            %STABILITY2DIFFCOEFF Converts short-term stability data
-            %(pre-loaded into instance properties) to diffusion
-            %coefficients, stored in obj.Q.
-            arguments
-                obj (1,1)   Clock
-            end
-
-            taus = obj.t_allan;
-            stds = obj.s_allan;
-            nrm = stds(end)^2;
-
-            if strcmpi(obj.type, "Allan")
-                % organize coefficients to solve Allan variance equation
-                b = (stds.^2 - obj.a^2 / 2 * taus.^2) / nrm;
-                
-                % perform constrained linear least squares fit to Allan
-                % variance equation
-                opts = fitoptions('Method', 'LinearLeastSquares', ...
-                    'Lower', [0 0], 'Robust', 'off');
-                ftype = fittype({'1/x', 'x'}, 'options', opts);
-                [curve, gof] = fit(taus, b, ftype);
-                
-                % convert and assign coefficients
-                B = [coeffvalues(curve) * nrm obj.a^2/2]';
-                s1 = sqrt(B(1));                % diffusion coefficient of white noise
-                s2 = sqrt(3 * B(2));            % ^ of random walk frequency noise
-                s3 = 0;                         % set to zero (aging rate is constant)
-
-            elseif strcmpi(obj.type, "Hadamard")
-                % organize coefficients to solve Hadamard variance equation
-                b = stds.^2 / nrm;
-                
-                % perform constrained linear least squares fit to Hadamard
-                % variance equation
-                opts = fitoptions('Method', 'LinearLeastSquares', ...
-                    'Lower', [0 0 0], 'Robust', 'off');
-                ftype = fittype({'1/x', 'x', 'x^3'}, 'options', opts);
-                [curve, gof] = fit(taus, b, ftype);
-
-                % convert and assign coefficients
-                B = coeffvalues(curve)' * nrm;
-                s1 = sqrt(B(1));                % diffusion coefficient of white noise
-                s2 = sqrt(B(2) * 6);            % ^ of random walk frequency noise
-                s3 = sqrt(120 * B(3) / 11);     % set to zero (aging rate is constant)
-
-            elseif strcmpi(obj.type, "constant")
-                s1 = 0;
-                s2 = 0;
-                s3 = 0;
-                gof.sse = 0;
-
-            else
-                error("stability2diffcoeff:invalidFit", ...
-                    "%s not found, valid fit options found in documentation.", obj.type);
-            end
-
-            obj.R2 = gof.rsquare;           % summary statistic of fit quality
-            obj.Q = diag([s1 s2 s3].^2);    % coefficients into process noise
-
-            if obj.DEBUG
-                % plot short-term stability fit to check quality
-                ta = obj.t_allan(1):obj.t_allan(end);
-                if strcmpi(obj.type, "Allan")
-                    sa = sqrt(B(1) ./ ta + B(2) .* ta + obj.a^2/2 * ta .^ 2);
-                else
-                    sa = sqrt(B(1) ./ ta + B(2) * ta + B(3) * ta .^ 3);
-                end
-            
-                figure();
-                loglog(ta, sa);
-                hold on;
-                scatter(obj.t_allan, obj.s_allan, 100, "rx");
-                xlabel("Interval (s)");
-                ylabel("\sigma_Y(\tau)");
-                title(sprintf("%s %s deviation fit", name, obj.type));
-                legend(["Model", "Data"]);
-            end
         end
     end
 
