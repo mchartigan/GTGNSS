@@ -8,3 +8,5 @@ Tasks to improve library
  - Have all filters inherit a common parent class
  - Make measurement inputs modular to filters so they can accept different measurements at different rates
  - Integrate propagators into filters somehow without eschewing non-orbit applications
+ - Normalize states, and implement square root Kalman filter
+ - Create OrbitalUser with propagator and clock

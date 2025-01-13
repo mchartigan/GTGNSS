@@ -14,6 +14,7 @@ arguments
 end
 
 figure();
+plotformat("APA", 1);
 % Display moon in trajectory plot
 R_me = 1738.1;          % km, moon equatorial radius
 R_mp = 1736;            % km, moon polar radius

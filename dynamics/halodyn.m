@@ -22,11 +22,11 @@ az =           - (1 - mu) * z/r1^3 - mu * z/r2^3;
 % compute jacobian F of [dU/dx dU/dy dU/dz], where U is the potential fn
 % See https://adsabs.harvard.edu/full/1984CeMec..32...53H (Howell, 1983)
 dx2  = 1 - (1-mu)*(r1^2 - 3*(x+mu)^2)/r1^5 - mu*(r2^2 - 3*(x-1+mu)^2)/r2^5;
-dy2  = 1 - (1-mu)*(r1^2 - 3*y^2)/r1^5 - mu*(r2^2 - 3*y^2)/r2^5;
-dz2  =   - (1-mu)*(r1^2 - 3*z^2)/r1^5 - mu*(r2^2 - 3*z^2)/r2^5;
+dy2  = 1 - (1-mu)*(r1^2 - 3*y^2)     /r1^5 - mu*(r2^2 - 3*y^2)       /r2^5;
+dz2  =   - (1-mu)*(r1^2 - 3*z^2)     /r1^5 - mu*(r2^2 - 3*z^2)       /r2^5;
 dxdy = (1-mu)*y*3*(x+mu)/r1^5 + mu*y*3*(x-1+mu)/r2^5;
 dxdz = (1-mu)*z*3*(x+mu)/r1^5 + mu*z*3*(x-1+mu)/r2^5;
-dydz = (1-mu)*z*3*y/r1^5      + mu*z*3*y/r2^5;
+dydz = (1-mu)*z*3*y     /r1^5 + mu*z*3*y       /r2^5;
 Uxx = [dx2 dxdy dxdz; dxdy dy2 dydz; dxdz dydz dz2];
 F = [zeros(3,3) eye(3); Uxx [0 1 0; -1 0 0; 0 0 0]];
 
