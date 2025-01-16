@@ -79,6 +79,20 @@ classdef LunarPropagator < OrbitPropagator
                 [r,v] = oe2rv(oes(i).a,oes(i).e,oes(i).i,oes(i).RAAN,oes(i).w,oes(i).f,obj.pri.GM);
                 obj.x0(:,i) = cspice_sxform('MOON_OP', 'J2000', obj.t0) * [r; v];
             end
+
+            % preallocate information if it was requested
+            if ~isempty(obj.t_pre)
+                % generate rotation matrices
+                T_J2PA = cspice_pxform('J2000', obj.pri.frame, obj.t_pre);
+
+                % convert rotation matrices to quaternions
+                l = length(obj.t_pre);
+                temp = zeros(l,4);
+                for j=1:l
+                    temp(j,:) = rotm2quat(T_J2PA(:,:,j));
+                end
+                quats = quaternion(temp(:,1)', temp(:,2)', temp(:,3)', temp(:,4)');
+            end
         end
 
         function plotlastorbits(obj,frame)

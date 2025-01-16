@@ -30,6 +30,13 @@ classdef OrbitPropagator < Propagator
         Cr      (1,1)   double {mustBeNonnegative} = 1
         % SRP area-to-mass ratio
         Am      (1,1)   double {mustBeNonnegative} = 0
+
+        % preallocation variables %
+        % time span covering preallocation period
+        t_pre   (1,:)   double
+        % inertial to body-fixed transformations for t_pre (used in
+        % spherical harmonics)
+        T_I2F   (3,3,:) double
     end
     properties (Constant, Access=private)
         % solar radiation pressure constants %
@@ -54,9 +61,17 @@ classdef OrbitPropagator < Propagator
             %    - ord; maximum degree and order of gravity model to use
             %    - opts; optional name-value arg, ODE45 integration tolerances
             %    - Cr; optional name-value arg, coefficient of reflectivity
-            %          for computing solar radiation pressure
+            %       for computing solar radiation pressure
             %    - A/m; optional name-value arg, area-to-mass ratio for
-            %           computing solar radiation pressure
+            %       computing solar radiation pressure
+            %    - preallocate; optional name-value arg, used to
+            %       preallocate transformation matrices so SPICE isn't called
+            %       during propagation. Can be used to speed up (maybe?)
+            %       propagation, but main intent is to be able to parallelize
+            %       calls. In this case, the argument is then time steps of
+            %       period in seconds past J2000. This range should
+            %       encompass any propagation intervals called in the
+            %       future, otherwise errors will occur.
             arguments
                 t0      (1,:)
                 ord     (1,1)   {mustBeInteger,mustBePositive}
@@ -68,6 +83,7 @@ classdef OrbitPropagator < Propagator
             % manage basic arguments
             obj.ord = ord;
             obj.opts = odeset("RelTol", 1e-9, "AbsTol", 1e-11);
+            obj.t_pre = [];
             default = 2;
             varargin = varargin{1};
 
@@ -79,6 +95,8 @@ classdef OrbitPropagator < Propagator
                         obj.Cr = varargin{i+1};
                     elseif strcmp(varargin{i}, "A/m")
                         obj.Am = varargin{i+1};
+                    elseif strcmp(varargin{i}, "preallocate")
+                        obj.t_pre = varargin{i+1};
                     elseif ~isempty(varargin)
                         error("OrbitPropagator:invalidArgument", ...
                             "%s is not a valid optional argument.", ...
@@ -134,8 +152,10 @@ classdef OrbitPropagator < Propagator
             for i=1:obj.nsats
                 [~,X] = ode89(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
                 X = X(2:end,:)';
-                for j=1:length(ts)
-                    X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
+                if ~strcmp(frame, 'J2000')
+                    for j=1:length(ts)
+                        X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
+                    end
                 end
                 xs(:,:,i) = X;
             end
