@@ -5,6 +5,8 @@ classdef User < handle
     properties
         % user trajectory 
         traj    (1,1)   function_handle = @(varargin) disp([])
+        xs      (:,:)   double
+        ts      (1,:)   double
         % reference frame for user trajectory
         frame   (1,:)   {mustBeText} = 'J2000'
         % receiver
@@ -45,6 +47,9 @@ classdef User < handle
                     x(1:6,i) = cspice_sxform(obj.frame,frame,ts(i)) * x(1:6,i);
                 end
             end
+
+            obj.xs = x;
+            obj.ts = ts;
         end
     end
 end

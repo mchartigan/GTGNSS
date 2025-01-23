@@ -85,7 +85,11 @@ classdef OrbitPropagator < Propagator
             obj.opts = odeset("RelTol", 1e-9, "AbsTol", 1e-11);
             obj.t_pre = [];
             default = 2;
-            varargin = varargin{1};
+            try
+                varargin = varargin{1};
+            catch
+                varargin = {};
+            end
 
             if nargin > default
                 for i=1:2:length(varargin)
@@ -418,8 +422,6 @@ classdef OrbitPropagator < Propagator
         function handles = statetotrajectory(obj)
             %STATETOTRAJECTORY Converts the last propagation to a
             %spline-interpolated trajectory handle.
-            %   Input:
-            %    - frame; reference frame for trajectories
             arguments
                 obj     (1,1)   OrbitPropagator
             end

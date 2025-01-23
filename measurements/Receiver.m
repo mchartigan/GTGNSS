@@ -3,7 +3,7 @@ classdef Receiver < handle
     %and carrier tracking loops.
     
     properties
-        % receiver clock %
+        % receiver clock, units in m %
         clock       (1,1)   Clock = Clock(0,zeros(3,1),"none")
 
         % signal characteristics %
@@ -13,7 +13,7 @@ classdef Receiver < handle
         Rc          (1,1)   double {mustBePositive} = 5.115e6
 
         % code tracking loop characteristics %
-        % code tracking loop order (first- or second-order)
+        % code tracking loop order (first-, second-, or third-order)
         codeorder   (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(codeorder,4)} = 2
         % is data present on signal? (i.e. does it have a nav msg or is it a 
         % pilot channel?) 1 - yes, 0 - no
@@ -178,14 +178,14 @@ classdef Receiver < handle
                         dyn = ddr;
 
                         % add oscillator phase noise
-                        vdop.clk = (lambda/2.5/obj.Bn_c * obj.freq)^2 * ...
+                        vdop.clk = (lambda/2.5/obj.Bn_c * obj.freq)^2 / obj.c^2 * ...
                             obj.clock.stability(1/obj.Bn_c) * ones(size(vdop.thermal));
                     case 3
                         w0 = obj.Bn_c / 0.7845;
                         dyn = dddr;
 
                         % add oscillator phase noise
-                        vdop.clk = (lambda/2.25/obj.Bn_c * obj.freq)^2 * ...
+                        vdop.clk = (lambda/2.25/obj.Bn_c * obj.freq)^2 / obj.c^2 * ...
                             obj.clock.stability(1/obj.Bn_c) * ones(size(vdop.thermal));
                     otherwise
                         error("noise:invalidCarrierOrder", ...
