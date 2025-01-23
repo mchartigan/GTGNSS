@@ -206,7 +206,7 @@ classdef OrbitPropagator < Propagator
                 x_sm = x_1m - x_1s;
                 r_sm = norm(x_sm);
 
-                % determine shadown conditions
+                % determine shadow conditions
                 a = asin(obj.Rs/r_ssun);        % apparent radius of sun
                 b1 = asin(obj.Re/r_se);         % apparent radius of earth
                 b2 = asin(obj.Rm/r_sm);         % apparent radius of moon
