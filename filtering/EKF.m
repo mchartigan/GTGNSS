@@ -9,7 +9,7 @@ classdef EKF < handle
         y      (:,:)   double               % measurements
         P      (:,:,:) double               % state covariance history
         Q      (:,:)   double               % process noise
-        R      (:,:)   double               % measurement noise
+        R      (:,:,:) double               % measurement noise
         opts   (1,1)   struct               % ODE45 propagation options
         n      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of states
         m      (1,1)   {mustBeNonnegative, mustBeInteger} = 1   % # of steps in t_meas
@@ -116,16 +116,28 @@ classdef EKF < handle
                 [x_, P_] = obj.propagate(k-1);
                 tk = obj.t(k);
             
-                if ismember(tk, obj.t_meas)   % step with measurement
+                if ismember(tk, obj.t_meas)     % step with measurement
                     j = find(obj.t_meas == obj.t(k));
                 
-                    H = obj.dhdx(tk,x_);                    % measurement partials matrix
-                    K = P_*H' / (H*P_*H' + obj.R);          % Kalman gain
-                    yj = obj.y(:,j);                        % get state measurement
-                    obj.x(:,k) = x_ + K*(yj - obj.h(tk,x_));% post-fit state estimate
+                    yj = obj.y(:,j);                % get state measurement
+                    mask = ~isnan(yj);              % generate mask of any NaN
+                    Y = yj - obj.h(tk, x_);         % measurement residual (O - C)
+                    Y = Y(mask);                    % mask out invalid meas
+
+                    H = obj.dhdx(tk,x_);            % measurement partials matrix
+                    H = H(mask,:);                  % mask out invalid meas
+                    % get appropriate measurement noise
+                    if size(obj.R, 3) > 1       % time-varying
+                        Rk = obj.R(mask,mask,j);
+                    else                        % time-invariant
+                        Rk = obj.R(mask,mask);
+                    end
+                    
+                    K = P_*H' / (H*P_*H' + Rk);     % Kalman gain
+                    obj.x(:,k) = x_ + K*Y;          % post-fit state estimate
                     % post-fit est. error covariance
                     obj.P(:,:,k) = (eye(obj.n) - K*H)*P_;   %*(eye(obj.n)-K*H)' + K*obj.R*K';
-                else                                % step without measurement
+                else                            % step without measurement
                     obj.x(:,k) = x_;
                     obj.P(:,:,k) = P_;
                 end
@@ -147,7 +159,7 @@ classdef EKF < handle
                 % reshape starting P to correct format
                 P0 = reshape(obj.P(:,:,k0), obj.n*obj.n, 1);
                 v0 = [obj.x(:,k0); P0];
-                [~,V] = ode45(@(t,v) obj.fulldyn(t, v, obj.dfdx(t,obj.x(:,k0)), ...
+                [~,V] = ode89(@(t,v) obj.fulldyn(t, v, obj.dfdx(t,obj.x(:,k0)), ...
                     obj.Q), obj.t([k0 k0+1]), v0, obj.opts);
     
                 % store covariance matrices in appropriate structure
@@ -172,7 +184,7 @@ classdef EKF < handle
             end
             
             if strcmp(obj.type, "hybrid")   % continuous dynamics
-                [~,X] = ode45(obj.f, obj.t([k0 k0+1]), obj.x(:,k0), obj.opts);
+                [~,X] = ode89(obj.f, obj.t([k0 k0+1]), obj.x(:,k0), obj.opts);
                 x = X(end,:)';
             else                            % discrete dynamics
                 x = obj.f(obj.t([k0 k0+1]), obj.x(:,k0));
@@ -193,7 +205,7 @@ classdef EKF < handle
             if strcmp(obj.type, "hybrid")   % continuous dynamics
                 % reshape starting P to correct format
                 P0 = reshape(obj.P(:,:,k0), obj.n*obj.n, 1);
-                [~,Y] = ode45(@(t,p) obj.lyapunov(p, obj.dfdx(t,obj.x(:,k0)), ...
+                [~,Y] = ode89(@(t,p) obj.lyapunov(p, obj.dfdx(t,obj.x(:,k0)), ...
                     obj.Q), obj.t([k0 k0+1]), P0, obj.opts);
     
                 % store covariance matrices in appropriate structure

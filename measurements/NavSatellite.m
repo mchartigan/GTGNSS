@@ -195,10 +195,20 @@ classdef NavSatellite < handle
                 xn = mvnrnd(xn', obj.filter.P0)';
                 Pn = repmat(obj.filter.P0, 1, 1, length(ts));
 
+                % store data in case called again
+                obj.tn = ts;
+                obj.P0 = obj.filter.P0;
+                obj.xn = xn;
+                obj.Pn = Pn;
+
             elseif isempty(obj.filter)
-                % no filter at all
-                error("getnavstates:invalidFilter", ...
-                    "Filter cannot be 'none' to call getnavstates().");
+                % no filter at all, return truth states
+                xn = obj.getrefstates(ts, 'J2000');
+                Pn = repmat(zeros(9,9), 1, 1, length(ts));
+
+                % store data in case called again
+                obj.tn = ts;
+                obj.xn = xn;
             else
                 error("getnavstates:noImplementedError", ...
                     "Navigation filtering feature is not yet implemented.");
@@ -207,12 +217,6 @@ classdef NavSatellite < handle
                 % before ts(1)?)
                 % run filter, get data at time steps, and return it
             end
-
-            % store data in case called again
-            obj.tn = ts;
-            obj.P0 = obj.filter.P0;
-            obj.xn = xn;
-            obj.Pn = Pn;
         end
 
         function [xm,xp,Pm,Pp,Po] = generatemodels(obj,ts,cadence)
@@ -444,7 +448,7 @@ classdef NavSatellite < handle
             err.psr.uee = err.psr.rec;
             % total error is sum of SISE and UEE
             err.psr.total = err.psr.sise + err.psr.uee;
-            true.psr = r + user.xs(7,:);        % xs(7) is in m already
+            true.psr = r + (user.xs(7,:) - obj.xr(7,:));    % xs(7) is in m already
             meas.psr = true.psr + err.psr.total;
 
             if opts.rate
@@ -460,7 +464,7 @@ classdef NavSatellite < handle
                 err.psrr.uee = err.psrr.rec;
                 % total error is sum of SISE and UEE
                 err.psrr.total = err.psrr.sise + err.psrr.uee;
-                true.psrr = dr + 1e3 * user.xs(8,:);    % xs(8) in m/s
+                true.psrr = dr + (user.xs(8,:) - obj.xr(8,:))*1e3;  % xs(8) in m/s
                 meas.psrr = true.psrr + err.psrr.total;
             end
 
@@ -507,12 +511,12 @@ classdef NavSatellite < handle
             r_s = x_s(1:3);
             v_s = x_s(4:6);
 
-            dr = r_s - r_u;         % relative user->sat position
-            dv = v_s - v_u;         % relative user->sat velocity
+            dr = (r_s - r_u)*1e3;   % relative user->sat position (m)
+            dv = (v_s - v_u)*1e6;   % relative user->sat velocity (mm/s)
             rho = norm(dr);         % scalar range
             dvdr = dv'*dr;          % dot product of dv and dr
-            y = [rho      + obj.c * (x(7) - x_s(7))
-                 dvdr/rho + obj.c * (x(8) - x_s(8))];
+            y = [rho      + (x(7) - x_s(7))
+                 dvdr/rho + (x(8) - x_s(8))*1e3];
         end
 
         function H = measpartials(obj,t,x,user)
@@ -541,12 +545,12 @@ classdef NavSatellite < handle
             r_s = x_s(1:3);
             v_s = x_s(4:6);
 
-            dr = r_s - r_u;         % relative user->sat position
-            dv = v_s - v_u;         % relative user->sat velocity
+            dr = (r_s - r_u)*1e3;   % relative user->sat position (m)
+            dv = (v_s - v_u)*1e6;   % relative user->sat velocity (mm/s)
             rho = norm(dr);         % scalar range
             dvdr = dv'*dr;          % dot product of dv and dr
-            H = [-dr'/rho                     0 0 0    obj.c 0     0
-                  (dr'*dvdr/rho^3 - dv'/rho) -dr'/rho  0     obj.c 0];
+            H = [-dr'/rho*1e3                     0 0 0        1 0   0
+                  (dr'*dvdr/rho^3 - dv'/rho)*1e3 -dr'/rho*1e6  0 1e3 0];
         end
 
         function CN0 = linkbudget(obj,user,r)
@@ -669,6 +673,9 @@ classdef NavSatellite < handle
             % future functions and to make LOS direction
             xref = obj.getrefstates(tt, 'J2000');
             xuser = user.getstates(ts, 'J2000');
+            % call model generation function so computemeas() can use it,
+            % 30min model so that error is negligible
+            obj.generatemodels(tt, [1800 1800]);
             
             % create line-of-sight direction for future functions
             los = xref(1:3,:,1) - xuser(1:3,:,1);
