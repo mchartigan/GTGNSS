@@ -347,11 +347,11 @@ classdef Clock < Propagator
             %datasheets.
             %   Inputs:
             %    - fc; carrier frequency (to determine multiplication of
-            %          clock frequency needed
+            %          clock frequency needed)
             %    - Bn; carrier loop noise bandwidth
             %   Outputs:
             %    - err; sample error, in rad
-            %    - var; variance of clock jitter, radians^2
+            %    - var; variance of clock jitter, rad^2
             %
             %   Ref: Zucca, C. and Tavella, P.; doi.org/10.1109/TUFFC.2005.1406554
             arguments
@@ -360,7 +360,8 @@ classdef Clock < Propagator
                 Bn  (1,1)   double {mustBePositive}
             end
 
-            Bn = Bn / 2;        % noise bandwidth presumed two-sided, so get one side
+            % noise bandwidth presumed two-sided, so get one side
+            Bn = Bn / 2;        
             N = fc / obj.f;
             noise = 10.^((obj.n_noise + 20*log10(N))/10);
             n_Bn = interp1(obj.f_noise, noise, Bn);
@@ -368,9 +369,8 @@ classdef Clock < Propagator
             f_int = [obj.f_noise(ii) Bn];
             n_int = [noise(ii) n_Bn];
             A = trapz(f_int, n_int);
-            A = 10*log10(A);
             
-            var = 2*10^(A/10) * (Clock.c/(fc*2*pi))^2;
+            var = 2*A;
             err = mvnrnd(0, var);
         end
 

@@ -75,7 +75,7 @@ classdef Receiver < handle
             obj.carrier = carrierloop;
         end
 
-        function [err,var,track] = noise(obj,CN0,ts,r,dr)
+        function [err,var,track] = noise(obj,CN0,ts,r,dr,satclock)
             %NOISE Returns the range and range-rate error (and variance) of
             %the receiver measurements.
             %   Input:
@@ -83,6 +83,7 @@ classdef Receiver < handle
             %    - ts; eval time steps, seconds past J2000
             %    - r; transmitter-receiver ranges (m) to compute error for
             %    - dr; transmitter-receiver range-rates (mm/s)
+            %    - satclock; satellite's Clock object
             %   Output:
             %    - err; random zero-mean variables with variance vrec,
             %           first row is range (m) and second is range-rate (mm/s)
@@ -90,11 +91,12 @@ classdef Receiver < handle
             %           measurements (mm^2/s^2)
             %    - track; is the receiver within its tracking thresh.?
             arguments
-                obj     (1,1)   Receiver
-                CN0     (1,:)   double
-                ts      (1,:)   double
-                r       (1,:)   double {mustBePositive}
-                dr      (1,:)   double
+                obj         (1,1)   Receiver
+                CN0         (1,:)   double
+                ts          (1,:)   double
+                r           (1,:)   double {mustBePositive}
+                dr          (1,:)   double
+                satclock    (1,1)   Clock
             end
 
 
@@ -124,7 +126,7 @@ classdef Receiver < handle
                           (1 + obj.data*1./(obj.T*CN0));
                 end
 
-                % set uncertainty from clock phase noise to 0 cuz it is
+                % set uncertainty from clock phase noise to zero cuz it is
                 var.clk = zeros(size(var.thermal));
                 var.dyn = zeros(size(var.thermal));     % initialize DSE
 
@@ -195,8 +197,6 @@ classdef Receiver < handle
                 % add dynamic stress error
                 vdop.dyn = (abs(dyn) / (3*w0^obj.carrierorder)).^2;
                 vdop.total = vdop.thermal + vdop.clk + vdop.dyn;
-                % don't add reference satellite clock jitter, it's
-                % negligible in most instances really
 
                 % compute validity (assume ATAN2 discriminator)
                 track = [track; 3*sqrt(vdop.total) <= lambda / (4*(1+obj.data))];
