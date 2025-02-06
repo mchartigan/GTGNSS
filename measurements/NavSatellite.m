@@ -485,7 +485,7 @@ classdef NavSatellite < handle
         end
 
 
-        function y = computemeas(obj,t,x,user)
+        function [y,x_s] = computemeas(obj,t,x,user)
             %COMPUTEMEAS Computes the ideal pseudorange and Doppler
             %measurements at time t between the user and NavSatellite
             %   Input:
@@ -504,8 +504,8 @@ classdef NavSatellite < handle
 
             % find transmission time w.r.t meas, based on nav msg knowledge
             % of satellite states
-            state2eph = @(x) x(1:6,:);
-            modeleph = @(t,~) state2eph(obj.getmodelstates(t));
+            state2eph = @(x_) x_(1:6,:);
+            modeleph = @(t_,~) state2eph(obj.getmodelstates(t_));
             tt = obj.timeofflight(t, modeleph, user);
             x_s = obj.getmodelstates(tt, user.frame);
             r_s = x_s(1:3);
@@ -854,7 +854,7 @@ classdef NavSatellite < handle
                 end
             end
             % pseudorange uncertainty from clock model, in m^2
-            var.psr.clk_offset = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;
+            var.psr.clk_offset = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]);
             % implement phase noise here if ya want
             var.psr.clk_stability = zeros(size(var.psr.clk_offset));
             var.psr.clk = var.psr.clk_offset + var.psr.clk_stability;
@@ -928,6 +928,14 @@ classdef NavSatellite < handle
                 xlabel("Elevation angle (\circ)");
                 ylabel("C/N0 (dB-Hz)");
                 title("C/N0 vs. User Antenna Elevation Angle");
+
+                figure();
+                plotformat("APA", 0.4, "scaling", 1, "coloring", "science");
+                plot(tosat(mask(1,:)) * 180/pi, touser(mask(1,:)) * 180/pi, "LineWidth", 2);
+                grid on;
+                xlabel("User off-boresight angle (\circ)");
+                ylabel("Satellite off-boresight angle (\circ)");
+
             end
         end
     end
