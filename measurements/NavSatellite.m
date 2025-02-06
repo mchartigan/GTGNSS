@@ -572,6 +572,10 @@ classdef NavSatellite < handle
             Ae = 0;                                     % dB, no atmospheric attenuation
             AP = obj.ant.P + obj.ant.gain + Ad + Ae;    % dBW, gain before receiver
             RP = AP + user.ant.gain + user.ant.As;      % dBW, gain before amps
+            % if 1
+            %     CN0 = RP;
+            %     return;
+            % end
             k = 1.3803e-23;                             % J/K, Boltzmann's constant
             N0 = 10*log10(k * user.ant.Ts);             % dBW/Hz, noise power spectral density
             CN0 = RP + user.ant.Nf + user.ant.L - N0;   % dB*Hz, carrier to noise density ratio
@@ -671,7 +675,11 @@ classdef NavSatellite < handle
             n = length(ts);     % no. of measurements
             % call state generation functions so that it's stored for
             % future functions and to make LOS direction
-            xref = obj.getrefstates(tt, 'J2000');
+            obj.getrefstates(tt, 'J2000');
+            % manually overwrite clock to assume perfect, since error is
+            % assumed elsewhere
+            obj.xr(7:9,:) = 0;
+            xref = obj.xr;
             xuser = user.getstates(ts, 'J2000');
             % call model generation function so computemeas() can use it,
             % 30min model so that error is negligible
@@ -857,6 +865,7 @@ classdef NavSatellite < handle
             var.psr.clk_offset = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]);
             % implement phase noise here if ya want
             var.psr.clk_stability = zeros(size(var.psr.clk_offset));
+            % getjitter() or etc.
             var.psr.clk = var.psr.clk_offset + var.psr.clk_stability;
 
             % velocity uncertainty from clock model
@@ -909,7 +918,13 @@ classdef NavSatellite < handle
             % -300 dB/Hz if angle is over off-boresight mask angle
             CN0 = CN0 - 300 * (tosat > pi/2 - user.ant.mask);
             CN0 = CN0 - 300 * (touser > pi/2 - obj.ant.mask);
-            [erec, vrec, mask1] = user.rec.noise(CN0, ts, r, dr);
+            % if 1
+            %     RP = CN0(CN0 > -200);
+            %     figure();
+            %     plot(RP);
+            %     fprintf("max: %f\nmin: %f\n", max(RP), min(RP));
+            % end
+            [erec, vrec, mask1] = user.rec.noise(CN0, ts, r, dr, obj.clock);
 
             % build and assign mask
             if ~isempty(mask)
@@ -981,6 +996,51 @@ classdef NavSatellite < handle
     end
 
     methods (Static)
+        function tlabel = sandpile3D(t,data,item)
+            %SANDPILE3D Plots a sandpile-looking breakdown of data on the
+            %current 3D figure. Part of a larger figure, so does not format
+            %the current figure at all.
+            %   Input:
+            %    - t; timestamps of data in seconds
+            %    - data; rows are contributors, cols are timestamps t
+            %    - item; number of item to plot on y axis
+            arguments
+                t       (1,:)   double
+                data    (:,:)   double {mustBeNonnegative}
+                item    (1,1)   {mustBeNonnegative,mustBeInteger}
+            end
+
+            colors = colororder;            % get colors for plotting
+            c = size(colors,1);
+            t = t - t(1);                   % normalize to 0
+            units = "(s)";                  % default to seconds
+            if t(end) >= 120 && t(end) < 120 * 60   % if 1min <= t < 120min, units are minutes
+                t = t / 60;
+                units = "(min)";
+            elseif t(end) < 48 * 3600               % if 2hr <= t < 48hr, units are hours
+                t = t / 3600;
+                units = "(hrs)";
+            elseif t(end) >= 2 * 86400              % if t >= 2d, units are days
+                t = t / 86400;
+                units = "(days)";
+            end
+
+            m = size(data,1);                       % number of contributors
+            px = [t flip(t)];                       % x data
+            py = item * ones(1, length(px));        % position
+            data = [zeros(1,size(data,2)); data];   % add buffer row
+            for i=1:m                               % plot patches
+                data(i+1,:) = data(i+1,:) + data(i,:);  % add data
+                pz = [data(i,:) flip(data(i+1,:))];     % z data
+                color = colors(mod(i-1,c)+1,:);         % get color
+                patch(px, py, pz, color, "EdgeColor", "none");
+                if i == 1, hold on; end
+            end
+
+            % return what the time label should be
+            tlabel = "Time " + units;           
+        end
+
         function sandpile(t,data,labels,ytext,tlabel)
             %SANDPILE Plots a sandpile-looking breakdown of data on the
             %current figure.

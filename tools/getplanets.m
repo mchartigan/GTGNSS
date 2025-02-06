@@ -13,7 +13,7 @@ for i=1:length(varargin)
         bod(i).GM = cspice_bodvrd('MOON', 'GM', 1);
         % bod(i).GM = 4902.80105551959;       % GMAT experimentally obtained grav param
         if strcmp(ref,'MOON')
-            bod(i).x = @(~) [0;0;0];
+            bod(i).x = @(tau) repmat([0;0;0],1,length(tau));
         else
             bod(i).x = @(tau) cspice_spkpos('MOON', tau, 'J2000', 'NONE', ref);
         end
@@ -23,7 +23,7 @@ for i=1:length(varargin)
         bod(i).name = 'EARTH';
         bod(i).GM = cspice_bodvrd('EARTH', 'GM', 1);
         if strcmp(ref,'EARTH')
-            bod(i).x = @(~) [0;0;0];
+            bod(i).x = @(tau) repmat([0;0;0],1,length(tau));
         else
             bod(i).x  = @(tau) cspice_spkpos('EARTH', tau, 'J2000', 'NONE', ref);
         end
