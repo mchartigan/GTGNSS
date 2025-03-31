@@ -27,10 +27,12 @@ dz2  =   - (1-mu)*(r1^2 - 3*z^2)     /r1^5 - mu*(r2^2 - 3*z^2)       /r2^5;
 dxdy = (1-mu)*y*3*(x+mu)/r1^5 + mu*y*3*(x-1+mu)/r2^5;
 dxdz = (1-mu)*z*3*(x+mu)/r1^5 + mu*z*3*(x-1+mu)/r2^5;
 dydz = (1-mu)*z*3*y     /r1^5 + mu*z*3*y       /r2^5;
-Uxx = [dx2 dxdy dxdz; dxdy dy2 dydz; dxdz dydz dz2];
-F = [zeros(3,3) eye(3); Uxx [0 1 0; -1 0 0; 0 0 0]];
+Uxx = [dx2  dxdy dxdz
+       dxdy dy2  dydz
+       dxdz dydz dz2 ];
+F = [zeros(3) eye(3); Uxx [0 2 0; -2 0 0; 0 0 0]];
 
-dphi = F * phi; % derivative of STM
+dphi = F * phi;                                     % derivative of STM
 dxdt = [vx vy vz ax ay az reshape(dphi, 1, 36)]';   % state derivative
 
 end

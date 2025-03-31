@@ -30,6 +30,19 @@ classdef OrbitPropagator < Propagator
         Cr      (1,1)   double {mustBeNonnegative} = 1
         % SRP area-to-mass ratio
         Am      (1,1)   double {mustBeNonnegative} = 0
+
+        % preallocation variables %
+        % are transformations preallocated?
+        pre     (1,1)   = 0
+        % time span covering preallocation period
+        t_pre   (1,:)   double
+        % inertial to body-fixed transformations for t_pre (used in
+        % spherical harmonics)
+        q_I2F   (1,:)   quaternion
+    end
+    properties(Access=private)
+        % precomputed factorial for harmonics calculations %
+        fact (:,:) = 0
     end
     properties (Constant, Access=private)
         % solar radiation pressure constants %
@@ -54,9 +67,17 @@ classdef OrbitPropagator < Propagator
             %    - ord; maximum degree and order of gravity model to use
             %    - opts; optional name-value arg, ODE45 integration tolerances
             %    - Cr; optional name-value arg, coefficient of reflectivity
-            %          for computing solar radiation pressure
+            %       for computing solar radiation pressure
             %    - A/m; optional name-value arg, area-to-mass ratio for
-            %           computing solar radiation pressure
+            %       computing solar radiation pressure
+            %    - preallocate; optional name-value arg, used to
+            %       preallocate transformation matrices so SPICE isn't called
+            %       during propagation. Can be used to speed up (maybe?)
+            %       propagation, but main intent is to be able to parallelize
+            %       calls. In this case, the argument is then time steps of
+            %       period in seconds past J2000. This range should
+            %       encompass any propagation intervals called in the
+            %       future, otherwise errors will occur.
             arguments
                 t0      (1,:)
                 ord     (1,1)   {mustBeInteger,mustBePositive}
@@ -68,8 +89,13 @@ classdef OrbitPropagator < Propagator
             % manage basic arguments
             obj.ord = ord;
             obj.opts = odeset("RelTol", 1e-9, "AbsTol", 1e-11);
+            obj.t_pre = [];
             default = 2;
-            varargin = varargin{1};
+            try
+                varargin = varargin{1};
+            catch
+                varargin = {};
+            end
 
             if nargin > default
                 for i=1:2:length(varargin)
@@ -79,6 +105,9 @@ classdef OrbitPropagator < Propagator
                         obj.Cr = varargin{i+1};
                     elseif strcmp(varargin{i}, "A/m")
                         obj.Am = varargin{i+1};
+                    elseif strcmp(varargin{i}, "preallocate")
+                        obj.pre = 1;
+                        obj.t_pre = varargin{i+1};
                     elseif ~isempty(varargin)
                         error("OrbitPropagator:invalidArgument", ...
                             "%s is not a valid optional argument.", ...
@@ -95,54 +124,114 @@ classdef OrbitPropagator < Propagator
             else
                 obj.t0 = cspice_str2et(t0);
             end
+
+            % precompute factorial for harmonics
+            n = 1:ord+1; m = 1:ord+1;
+            m = m(2:end);
+            obj.fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
         end
         
-        function [ts,xs] = run(obj,tf,n,frame)
-            %RUN Propagate the input states for tf seconds (n steps
+        function [ts,xs,fail] = run(obj,tf,n,frame,assign)
+            %RUN Propagate the stored states for tf seconds (n steps
             %between). Data returned in provided frame.
             %   Input:
             %    - tf; final time, seconds past t0
             %    - n; number of time steps
             %    - frame; reference frame to return data in
+            %    - assign; optional argument (default true), should
+            %         propagation data be assigned to object properties
             arguments
                 obj     (1,1)   OrbitPropagator
                 tf      (1,1)   double {mustBePositive}
                 n       (1,1)   {mustBeInteger,mustBePositive}
                 frame   (1,:)   char
+                assign  (1,1) = true
             end
 
             ts = linspace(0, tf, n);
-            [ts,xs] = obj.runat(ts,frame);
+            [ts,xs,fail] = obj.runat(ts,frame,assign);
         end
 
-        function [ts,xs] = runat(obj,ts,frame)
-            %RUNAT Propagate the input states over the provided time steps. 
+        function [ts,xs,fail] = runat(obj,ts,frame,assign)
+            %RUNAT Propagate the stored states over the provided time steps. 
             %Data returned in provided frame.
             %   Input:
             %    - ts; eval time steps, seconds past t0
             %    - frame; reference frame to return data in
+            %    - assign; optional argument (default true), should
+            %         propagation data be assigned to object properties
             arguments
                 obj     (1,1)   OrbitPropagator
                 ts      (1,:)   double
                 frame   (1,:)   char
+                assign  (1,1) = true
             end
 
             n = length(ts);
             ts = obj.t0 + ts;
             xs = zeros(6,n,obj.nsats);
+            fail = 0;       % flag if propagation failed
             
             for i=1:obj.nsats
                 [~,X] = ode89(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
                 X = X(2:end,:)';
-                for j=1:length(ts)
-                    X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
+                % catch and bounce if propagation failed
+                if size(X,2) ~= n, fail = 1; return; end
+
+                if ~strcmp(frame, 'J2000')  % transform if necessary
+                    for j=1:length(ts)
+                        X(:,j) = cspice_sxform('J2000', frame, ts(j)) * X(:,j);
+                    end
                 end
-                xs(:,:,i) = X;
+
+                xs(:,:,i) = X;              % assign to output
             end
 
-            obj.ts = ts;
-            obj.xs = xs;
-            obj.frame = frame;
+            if assign       % only overwrite object properties if requested
+                obj.ts = ts;
+                obj.xs = xs;
+                obj.frame = frame;
+            end
+        end
+
+        function [ts,xs,fail] = run_prealloc(obj,x0_,ts)
+            %RUN_PREALLOC Propagate the input states over the provided time
+            %steps. Designed for use in parallelized setups, so read
+            %extended description for details.
+            %   CAUTION: this is designed pretty much exclusively for
+            %   parallelized work, causing several changes from
+            %   OrbitPropagator.runat:
+            %    - starting state is passed in to avoid assignment
+            %    - ODE45 is used instead of ODE89 for speed
+            %    - results are not assigned back to the object
+            %    - data assumed given/returned in J2000
+            %    - ts are seconds past J2000 rather than past t0
+            %    - generally a bunch of features are stripped out for
+            %      efficiency
+            %
+            %   Input:
+            %    - x0_; starting states of satellites
+            %    - ts; eval time steps, seconds past J2000
+            %    - frame; reference frame to return data in
+            %    - assign; optional argument (default true), should
+            %         propagation data be assigned to object properties
+            arguments
+                obj     (1,1)   OrbitPropagator
+                x0_     (6,:,:) double
+                ts      (1,:)   double
+            end
+
+            n = length(ts);
+            xs = zeros(6,n,obj.nsats);
+            fail = 0;       % flag if propagation failed
+            
+            for i=1:obj.nsats
+                [~,X] = ode45(@obj.dynamics, ts, x0_(:,i), obj.opts);
+                % catch and bounce if propagation failed
+                if size(X,1) ~= n, fail = 1; return; end
+
+                xs(:,:,i) = X';     % assign to output
+            end
         end
 
         function dxdt = dynamics(obj,t,x)
@@ -167,8 +256,14 @@ classdef OrbitPropagator < Propagator
             x_1s = x(1:3);
             r_1s = norm(x_1s);
             
-            % get lunar nonspherical gravity effects
-            T = cspice_pxform('J2000', obj.pri.frame, t);
+            % get transformation from inertial to body-fixed
+            if obj.pre
+                T = obj.rotate_prealloc(t, obj.q_I2F);
+            else
+                T = cspice_pxform('J2000', obj.pri.frame, t);
+            end
+
+            % get nonspherical gravity effects
             x_me = T * x_1s;
             f_ns = obj.fast_harmonics(x_me);
             f_ns = T' * f_ns;
@@ -398,8 +493,6 @@ classdef OrbitPropagator < Propagator
         function handles = statetotrajectory(obj)
             %STATETOTRAJECTORY Converts the last propagation to a
             %spline-interpolated trajectory handle.
-            %   Input:
-            %    - frame; reference frame for trajectories
             arguments
                 obj     (1,1)   OrbitPropagator
             end
@@ -420,6 +513,33 @@ classdef OrbitPropagator < Propagator
                              * ppval(pp, tau);
             end
         end
+
+        function R = rotate_prealloc(obj,t,qs)
+            %ROTATE_PREALLOC provides a rotation matrix at time t, given a
+            %list of quaternions associated with times t_pre.
+            %   This function is used to replace SPICE cspice_*xform calls
+            %   from within a propagation so that they can be parallelized.
+            %   qs are provided as an extra parameter so that this
+            %   function can be used for multiple different
+            %   transformations.
+            %
+            %   Input:
+            %    - t; time to get the rotation at (must be w/in bounds of
+            %         t_pre)
+            %    - qs; list of quaternions corresponding to t_pre
+            
+            % get surrounding time steps to t
+            low = find(obj.t_pre < t, 1, 'last');
+            high = find(obj.t_pre >= t, 1);
+            % catch if at end or beginning of index
+            if isempty(low), low = 1; high = high+1; end
+            if isempty(high), high = low; low = low-1; end
+
+            % scale t onto [0,1] and call slerp, then return rotation matrix
+            tau = (t - obj.t_pre(low))/(obj.t_pre(high) - obj.t_pre(low));
+            q = slerp(qs(low), qs(high), tau);
+            R = quat2rotm(q);
+        end
     end
 
     methods (Access = private)
@@ -431,10 +551,6 @@ classdef OrbitPropagator < Propagator
             %
             %   Input:
             %    - x; position vector of point (3,) [km]
-            arguments
-                obj (1,1)   OrbitPropagator
-                x   (3,1)   double
-            end
         
             nn = obj.ord;       % max degree (and order m) of harmonics
             mu = obj.pri.GM;    % km^3/s^2, gravitational parameter of body
@@ -451,11 +567,10 @@ classdef OrbitPropagator < Propagator
                     trace((n'-m+1) * (C(n,m).*V(n+1,m) + S(n,m).*W(n+1,m))')];
         
             m = m(2:end);
-            fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
             f(1) = f(1) + A/2 * trace((C(n,m)*V(n+1,m+1)' + S(n,m)*W(n+1,m+1)') ...
-                   - fact * (C(n,m).*V(n+1,m-1) + S(n,m).*W(n+1,m-1))');
+                   - obj.fact * (C(n,m).*V(n+1,m-1) + S(n,m).*W(n+1,m-1))');
             f(2) = f(2) + A/2 * trace((C(n,m)*W(n+1,m+1)' - S(n,m)*V(n+1,m+1)') ...
-                   + fact * (C(n,m).*W(n+1,m-1) - S(n,m).*V(n+1,m-1))');
+                   + obj.fact * (C(n,m).*W(n+1,m-1) - S(n,m).*V(n+1,m-1))');
         end
 
         function [V,W] = VandW(obj,x,nn)

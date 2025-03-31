@@ -6,7 +6,7 @@ classdef NavSatellite < handle
     properties
         % propagator instance (default one so MATLAB doesn't throw a fit)
         prop    (1,1)   OrbitPropagator = OrbitPropagator(0,1)
-        % clock instance (default one again ^)
+        % clock instance, normalized with c (default one again ^)
         clock   (1,1)   Clock = Clock(0,zeros(3,1),"none")
         % nav filter
         filter
@@ -72,6 +72,8 @@ classdef NavSatellite < handle
             obj.prop = prop;
             obj.clock = clock;
             obj.ant = ant;
+            % initialize filter for default case of "none"
+            obj.filter = [];
 
             if strcmp(filter, "EKF")
                 % CT process noise
@@ -97,7 +99,7 @@ classdef NavSatellite < handle
                 end
                 obj.filter.P0 = meas.P0;
 
-            else
+            elseif ~strcmpi(filter, "none")
                 error("NavSatellite:invalidFilter", ...
                     'Filter must be "EKF". See documentation.');
             end
@@ -192,6 +194,21 @@ classdef NavSatellite < handle
                 % add noise to reference trajectory for nav states
                 xn = mvnrnd(xn', obj.filter.P0)';
                 Pn = repmat(obj.filter.P0, 1, 1, length(ts));
+
+                % store data in case called again
+                obj.tn = ts;
+                obj.P0 = obj.filter.P0;
+                obj.xn = xn;
+                obj.Pn = Pn;
+
+            elseif isempty(obj.filter)
+                % no filter at all, return truth states
+                xn = obj.getrefstates(ts, 'J2000');
+                Pn = repmat(zeros(9,9), 1, 1, length(ts));
+
+                % store data in case called again
+                obj.tn = ts;
+                obj.xn = xn;
             else
                 error("getnavstates:noImplementedError", ...
                     "Navigation filtering feature is not yet implemented.");
@@ -200,12 +217,6 @@ classdef NavSatellite < handle
                 % before ts(1)?)
                 % run filter, get data at time steps, and return it
             end
-
-            % store data in case called again
-            obj.tn = ts;
-            obj.P0 = obj.filter.P0;
-            obj.xn = xn;
-            obj.Pn = Pn;
         end
 
         function [xm,xp,Pm,Pp,Po] = generatemodels(obj,ts,cadence)
@@ -364,16 +375,17 @@ classdef NavSatellite < handle
             %    - ts; eval time steps, seconds past J2000
             %    - user; User object instance
             %    - frame; reference frame user data is provided in
-            %    - opts; s/c settings struct all fields must be set:
-            %             - cadence (see generatemodels input)
+            %    - opts; settings struct, fields include:
+            %       - SISE; "NASA" or "custom"
+            %       - cadence; see generatemodels input, only used if SISE
+            %          is "custom"
             %   Output:
             %    - meas; meas.psr is measured pseudorange measurements, 
-            %            meas.psrr is doppler measurements
+            %       meas.psrr is doppler measurements
             %    - var; contains the overall variance error budget, incl 
-            %           breakdowns by category, i.e. what the user could
-            %           calculate
+            %       breakdowns by category, i.e. what the user could calculate
             %    - true; contains the true range and range-rate data, as
-            %            well as errors broken down by source
+            %       well as errors broken down by source
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
@@ -381,210 +393,78 @@ classdef NavSatellite < handle
                 opts    (1,1)   struct
             end
 
-            n = length(ts);
             % get true measurements
             % run propagator to get trajectory estimate
             obj.prop.runat(ts - obj.prop.t0, 'J2000');
             fref = obj.prop.statetotrajectory();
             [tt, r, dr] = obj.timeofflight(ts, fref{1}, user);
-
-            % Whether it's a PLL or FLL, signal frequency is not observed
-            % directly; rather it's measured as a difference of two phases.
-            % Thus, clock states need to be obtained at measurement
-            % spacings.
             % is the user capable of measuring range-rate? (has carrier tracking)
-            rate = ~strcmpi(user.rec.carrier, "none");
-            if rate
-                % determine rate measurement spacing (carrier predetection
-                % integration time, unless Tm is specified / larger)
-                if user.rec.T_c > user.rec.Tm
-                    Tm = user.rec.T_c;
-                else
-                    Tm = user.rec.Tm;
-                end
+            opts.rate = ~strcmpi(user.rec.carrier, "none");
 
-                % catch if Tm is too large
-                if ts(1)-Tm < obj.prop.t0 || ts(1)-Tm < obj.clock.t0
-                    error("observemeas:invalidStartMeas", ...
-                        "First measurement must be >= User.rec.Tm past starting epoch.");
-                end
-
-                % interleave times
-                tt_old = tt;
-                tt = union(tt_old-Tm, tt_old);
-                it = ismember(tt, tt_old);
-                it_Tm = ismember(tt, tt_old-Tm);
-                ts_old = ts;
-                ts = union(ts_old-Tm, ts_old);
-                is = ismember(ts, ts_old);
-                is_Tm = ismember(ts, ts_old-Tm);
-            end
-
-            % get user state info for measurements
-            xref = obj.getrefstates(tt, 'J2000');
-            xuser = user.getstates(ts, 'J2000');
-            if nargout > 2
-                [xmdl,xprop,Pmdl,Pprop] = obj.generatemodels(tt, opts.cadence);
+            % SIGNAL IN SPACE ERROR CALCULATION %
+            if strcmpi(opts.SISE, "custom")
+                [err,var,mask2,los] = obj.getSISE(tt,ts,user,opts);
+            elseif strcmpi(opts.SISE, "NASA")
+                [err,var,los] = obj.getNASASISE(tt,ts,user,opts);
+                mask2 = [];     % set mask to nothing for getUEE() later
             else
-                [xmdl,xprop] = obj.generatemodels(tt, opts.cadence);
+                error("observemeas:invalidOption", ...
+                    "opts.SISE must be either 'NASA' or 'custom'.");
             end
 
-            if rate
-                % get nav message update intervals as they were assigned in
-                % .generatemodels()
-                mask2 = ones(2,n);
-                I = NavSatellite.getupdateindices(tt,opts.cadence);
-                tI =  tt(union(I(1,:), I(2,:)));
+            % USER EQUIPMENT ERROR CALCULATION %
+            % farm out to a helper function
+            [erec,vrec,meas.mask] = obj.getUEE(ts,r,dr,user,los(:,:),mask2);
 
-                % un-interleave times
-                tt = tt(it);
-                ts = ts(is);
-
-                % with measurement transmit times, compute which need to be
-                % masked based on if they were within Tm of a nav message
-                % update
-                mat = tt - tI';
-                mask2(2,:) = and(mask2(2,:), ~any(and(mat >= 0, mat <= Tm)));
-
-                % separate states
-                % store concatenated data and create 2-page 3D matrices, then
-                % un-interleave data, storing in 2 separate pages of matrix
-                % first tt(i)-Tm comes, then tt(i), so store first value on 
-                % second page and second on first page
-                xref = cat(3, xref(:,it), xref(:,it_Tm));
-                xuser = cat(3, xuser(:,is), xuser(:,is_Tm));
-                xmdl = cat(3, xmdl(:,it), xmdl(:,it_Tm));
-                xprop = cat(3, xprop(:,it), xprop(:,it_Tm));
-                % remove tt-Tm data from covariances
-                if nargout > 2
-                    Pmdl = Pmdl(:,:,it);
-                    Pprop = Pprop(:,:,it);
+            % PLANET INTERSECTION CALCULATION %
+            R = cspice_bodvrd('MOON', 'RADII', 3);
+            R = R(1);           % radius of moon
+            for i=1:length(ts)
+                r_s = norm(obj.xr(1:3,i));
+                r_su = norm(user.xs(1:3,i) - obj.xr(1:3,i));
+                u_us = los(1:3,i);
+                a_sm = asin(R/r_s);
+                a_su = acos(u_us' * obj.xr(1:3,i) / r_s);
+                r_t = sqrt(r_s^2 - R^2);
+                % if the moon center/moon tangent angle from the satellite
+                % POV is bigger than the moon center/sat-user angle and the
+                % range is > moon tangent range, satellite is out of view.
+                if a_su < a_sm && r_su > r_t
+                    meas.mask(:,i) = 0;
                 end
             end
 
-            psr_units = 1e3;    % convert distances from km to m
-            psrr_units = 1e6;   % convert speeds from km/s to mm/s
 
-            % create line-of-sight direction
-            los = xref(1:3,:,:) - xuser(1:3,:,:);
-            los = los ./ sqrt(sum(los.^2, 1));
-
-            % computer state errors from propagation and model
-            err_prop = xprop - xref;
-            err_mdl = xmdl - xprop;
-
-            % project error onto line-of-sight direction
-            err.psr.prop = zeros(1,n);      % pseudorange error from nav uncertainty propagation
-            err.psr.mdl = zeros(1,n);       % pseudorange error from model fitting
-            err.psrr.prop = zeros(1,n);     % Doppler error from nav uncertainty propagation
-            err.psrr.mdl = zeros(1,n);      % Doppler error from model fitting
-            for i=1:n
-                err.psr.prop(i) = err_prop(1:3,i,1)' * los(:,i,1) * psr_units;
-                err.psr.mdl(i) = err_mdl(1:3,i,1)' * los(:,i,1) * psr_units;
-
-                if rate         % range-rate measurements capable
-                    err.psrr.prop(i) = err_prop(4:6,i,1)'*los(:,i,1) * psrr_units;
-                    err.psrr.mdl(i) = err_mdl(4:6,i,1)'*los(:,i,1) * psrr_units;
-                end
-            end
-            % pseudorange error from clock model
-            err.psr.clk = (err_mdl(7,:,1) + err_prop(7,:,1)) * obj.c;       % s to m
-            % velocity error from clock model
-            if rate     % receiver is capable of measuring rate
-                err.psrr.clk = (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
-                    err_prop(7,:,1)-err_prop(7,:,2)) / Tm * obj.c * 1e3;    % s/s to mm/s
-                % err.psrr.clk = ((err_mdl(8,:,1) + err_prop(8,:,1))) * obj.c * 1e3;   % s/s to mm/s
-            end
-
-            if nargout > 2
-                % project uncertainty onto line-of-sight direction
-                var.psr.prop = zeros(1,n);      % pseudorange uncertainty from nav
-                var.psr.mdl = zeros(1,n);       % pseudorange uncertainty from model
-                var.psrr.prop = zeros(1,n);     % Doppler uncertainty from nav
-                var.psrr.mdl = zeros(1,n);      % Doppler uncertainty from model
-                for i=1:n
-                    % pseudorange uncertainty from ephemeris, in m^2
-                    var.psr.prop(i) = los(:,i,1)' * Pprop(1:3,1:3,i) * los(:,i,1) * psr_units^2;
-                    var.psr.mdl(i) = los(:,i,1)' * Pmdl(1:3,1:3,i) * los(:,i,1) * psr_units^2;
-
-                    if rate
-                        % Doppler uncertainty from ephemeris, in mm^2/s^2
-                        var.psrr.prop(i) = los(:,i,1)' * Pprop(4:6,4:6,i) * los(:,i,1) * psrr_units^2;
-                        var.psrr.mdl(i) = los(:,i,1)' * Pmdl(4:6,4:6,i) * los(:,i,1) * psrr_units^2;
-                    end
-                end
-                % pseudorange uncertainty from clock model, in m^2
-                var.psr.clk_offset = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]) * obj.c^2;
-                % implement phase noise here if ya want
-                var.psr.clk_stability = zeros(size(var.psr.clk_offset));
-                var.psr.clk = var.psr.clk_offset + var.psr.clk_stability;
-
-                % velocity uncertainty from clock model
-                % Added frequency offset error as well!! We trust the LNSS
-                % sats so when a receiver is comparing frequencies, it'll
-                % assume its own is wrong. Thus the frequency offset is
-                % mistakenly conferred onto the user or it throws off
-                % velocity measurements. The allan variance is just noise
-                % on top of frequency offset measurements, so since we are
-                % directly attempting to measure the frequency that noise
-                % is applied to our estimates + the offset!
-                if rate
-                    % Doppler uncertainty from s/c clock, in mm^2/s^2
-                    var.psrr.clk_offset = reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) * (obj.c * 1e3)^2;
-                    var.psrr.clk_stability = ones(1,n) * obj.clock.stability(Tm) * (obj.c * 1e3)^2;
-                    var.psrr.clk = var.psrr.clk_offset + var.psrr.clk_stability;
-                end
-            end
-
-            % compute link budget and receiver noise
-            CN0 = obj.linkbudget(user, r);
-            % add mask to link budget %
-            % get nadir direction at each time step
-            nadir = xuser(1:3,:,1) ./ sqrt(sum(xuser(1:3,:,1).^2, 1));
-            % compute angle between nadir and satellite
-            tosat = acos(sum(nadir .* los(:,:,1), 1));
-            % -300 dB/Hz if angle is over off-boresight mask angle
-            CN0 = CN0 - 300 * (tosat > pi/2 - user.ant.mask);
-            [erec, vrec, mask1] = user.rec.noise(CN0, ts, r, dr);
-
-            % build and assign mask
-            if rate
-                meas.mask = and(mask1, mask2);
-            else
-                meas.mask = mask1;
-            end
-
-            % plot CN0 for simulation
-            if obj.DEBUG
-                figure();
-                plotformat("APA", 0.25, "scaling", 1, "coloring", "science");
-                elev = (pi/2 - tosat) * 180/pi;
-                plot(elev(meas.mask(1,:)), CN0(meas.mask(1,:)), "LineWidth", 2);
-                grid on;
-                xlabel("Elevation angle (\circ)");
-                ylabel("C/N0 (dB-Hz)");
-                title("C/N0 vs. User Antenna Elevation Angle");
-            end
-
+            % OUTPUT ARGUMENT FORMATTING %
             % assign pseudorange outputs
+            % categorize receiver errors by type
             err.psr.rec = erec(1,:);
             var.psr.rec_thermal = vrec.thermal(1,:);
             var.psr.rec_clk = vrec.clk(1,:);
             var.psr.rec_dyn = vrec.dyn(1,:);
             var.psr.rec = vrec.total(1,:);
-            err.psr.total = err.psr.prop + err.psr.mdl + err.psr.clk + err.psr.rec;
-            true.psr = r + obj.c * xuser(7,:,1);
+            % categorize errors by signal-in-space or user equipment
+            err.psr.sise = err.psr.prop + err.psr.mdl + err.psr.clk;
+            err.psr.uee = err.psr.rec;
+            % total error is sum of SISE and UEE
+            err.psr.total = err.psr.sise + err.psr.uee;
+            true.psr = r + (user.xs(7,:) - obj.xr(7,:));    % xs(7) is in m already
             meas.psr = true.psr + err.psr.total;
 
-            if rate
+            if opts.rate
                 % assign pseudorange-rate outputs
+                % categorize receiver errors by type
                 err.psrr.rec = erec(2,:);
                 var.psrr.rec_thermal = vrec.thermal(2,:);
                 var.psrr.rec_clk = vrec.clk(2,:);
                 var.psrr.rec_dyn = vrec.dyn(2,:);
                 var.psrr.rec = vrec.total(2,:);
-                err.psrr.total = err.psrr.prop + err.psrr.mdl + err.psrr.clk + err.psrr.rec;
-                true.psrr = dr + obj.c * xuser(8,:,1);
+                % categorize errors by signal-in-space or user equipment
+                err.psrr.sise = err.psrr.prop + err.psrr.mdl + err.psrr.clk;
+                err.psrr.uee = err.psrr.rec;
+                % total error is sum of SISE and UEE
+                err.psrr.total = err.psrr.sise + err.psrr.uee;
+                true.psrr = dr + (user.xs(8,:) - obj.xr(8,:))*1e3;  % xs(8) in m/s
                 meas.psrr = true.psrr + err.psrr.total;
             end
 
@@ -592,15 +472,20 @@ classdef NavSatellite < handle
             true.receivetime = ts;
             true.err = err;
 
-            if nargout > 2
-                var.psr.total = var.psr.prop + var.psr.mdl + var.psr.clk + var.psr.rec;
-                if rate
-                    var.psrr.total = var.psrr.prop + var.psrr.mdl + var.psrr.clk + var.psrr.rec;
-                end
+            % categorize variance by signal-in-space or user equipment,
+            % then total variance is sum of SISE and UEE
+            var.psr.sise = var.psr.prop + var.psr.mdl + var.psr.clk;
+            var.psr.uee = var.psr.rec;
+            var.psr.total = var.psr.sise + var.psr.uee;
+            if opts.rate
+                var.psrr.sise = var.psrr.prop + var.psrr.mdl + var.psrr.clk;
+                var.psrr.uee = var.psrr.rec;
+                var.psrr.total = var.psrr.sise + var.psrr.uee;
             end
         end
 
-        function y = computemeas(obj,t,x,user)
+
+        function [y,x_s] = computemeas(obj,t,x,user)
             %COMPUTEMEAS Computes the ideal pseudorange and Doppler
             %measurements at time t between the user and NavSatellite
             %   Input:
@@ -619,19 +504,19 @@ classdef NavSatellite < handle
 
             % find transmission time w.r.t meas, based on nav msg knowledge
             % of satellite states
-            state2eph = @(x) x(1:6,:);
-            modeleph = @(t,~) state2eph(obj.getmodelstates(t));
+            state2eph = @(x_) x_(1:6,:);
+            modeleph = @(t_,~) state2eph(obj.getmodelstates(t_));
             tt = obj.timeofflight(t, modeleph, user);
             x_s = obj.getmodelstates(tt, user.frame);
             r_s = x_s(1:3);
             v_s = x_s(4:6);
 
-            dr = r_s - r_u;         % relative user->sat position
-            dv = v_s - v_u;         % relative user->sat velocity
+            dr = (r_s - r_u)*1e3;   % relative user->sat position (m)
+            dv = (v_s - v_u)*1e6;   % relative user->sat velocity (mm/s)
             rho = norm(dr);         % scalar range
             dvdr = dv'*dr;          % dot product of dv and dr
-            y = [rho      + obj.c * (x(7) - x_s(7))
-                 dvdr/rho + obj.c * (x(8) - x_s(8))];
+            y = [rho      + (x(7) - x_s(7))
+                 dvdr/rho + (x(8) - x_s(8))*1e3];
         end
 
         function H = measpartials(obj,t,x,user)
@@ -660,12 +545,12 @@ classdef NavSatellite < handle
             r_s = x_s(1:3);
             v_s = x_s(4:6);
 
-            dr = r_s - r_u;         % relative user->sat position
-            dv = v_s - v_u;         % relative user->sat velocity
+            dr = (r_s - r_u)*1e3;   % relative user->sat position (m)
+            dv = (v_s - v_u)*1e6;   % relative user->sat velocity (mm/s)
             rho = norm(dr);         % scalar range
             dvdr = dv'*dr;          % dot product of dv and dr
-            H = [-dr'/rho                     0 0 0    obj.c 0     0
-                  (dr'*dvdr/rho^3 - dv'/rho) -dr'/rho  0     obj.c 0];
+            H = [-dr'/rho*1e3                     0 0 0        1 0   0
+                  (dr'*dvdr/rho^3 - dv'/rho)*1e3 -dr'/rho*1e6  0 1e3 0];
         end
 
         function CN0 = linkbudget(obj,user,r)
@@ -687,6 +572,10 @@ classdef NavSatellite < handle
             Ae = 0;                                     % dB, no atmospheric attenuation
             AP = obj.ant.P + obj.ant.gain + Ad + Ae;    % dBW, gain before receiver
             RP = AP + user.ant.gain + user.ant.As;      % dBW, gain before amps
+            % if 1
+            %     CN0 = RP;
+            %     return;
+            % end
             k = 1.3803e-23;                             % J/K, Boltzmann's constant
             N0 = 10*log10(k * user.ant.Ts);             % dBW/Hz, noise power spectral density
             CN0 = RP + user.ant.Nf + user.ant.L - N0;   % dB*Hz, carrier to noise density ratio
@@ -757,6 +646,315 @@ classdef NavSatellite < handle
         end
     end
 
+    methods (Access = private)
+        function [err,var,los] = getNASASISE(obj,tt,ts,user,opts)
+            %GETSISE Return the signal in space error for the satellite to
+            %the given user, based only on the NASA SRD SISE budget.
+            %   SISE Position: 13.43 m 3-sigma
+            %   SISE Velocity: 1.2 mm/s 3-sigma @ 10s
+            %
+            %   References:
+            %    - Speciale, N., Lunar Relay Services Requirements Document 
+            %       (SRD), ESC-LCRNS-REQ-0090, NASA.
+            %
+            %   Input:
+            %    - tt; signal transmission times, seconds past J2000
+            %    - ts; signal reception times, seconds past J2000
+            %    - user; User object instance
+            %    - opts; s/c settings struct all fields must be set:
+            %       - rate; logical, can receiver measure range-rate?
+            %       - cadence (see generatemodels input)
+            arguments
+                obj     (1,1)   NavSatellite
+                tt      (1,:)   double
+                ts      (1,:)   double
+                user    (1,1)   User
+                opts    (1,1)   struct
+            end
+
+            n = length(ts);     % no. of measurements
+            % call state generation functions so that it's stored for
+            % future functions and to make LOS direction
+            obj.getrefstates(tt, 'J2000');
+            % manually overwrite clock to assume perfect, since error is
+            % assumed elsewhere
+            obj.xr(7:9,:) = 0;
+            xref = obj.xr;
+            xuser = user.getstates(ts, 'J2000');
+            % call model generation function so computemeas() can use it,
+            % 30min model so that error is negligible
+            obj.generatemodels(tt, [1800 1800]);
+            
+            % create line-of-sight direction for future functions
+            los = xref(1:3,:,1) - xuser(1:3,:,1);
+            los = los ./ sqrt(sum(los.^2, 1));
+
+            % get the position variance and divide by 3, since we'll split
+            % it equally among the prop, mdl, and clk sources for easy
+            % integration and testing. In practice, only the total SISE should
+            % be considered by users.
+            v_r = (13.43 / 3)^2 / 3;            % variance of each
+            var.psr.prop = v_r * ones(1,n);     % assign variance
+            var.psr.mdl  = v_r * ones(1,n);
+            var.psr.clk  = v_r * ones(1,n);
+            e_r = mvnrnd(zeros(3*n, 1), v_r);   % get 3 RVs
+            err.psr.prop = e_r(1:n)';           % assign RVs to have error
+            err.psr.mdl  = e_r(n+1:2*n)';
+            err.psr.clk  = e_r(2*n+1:3*n)';
+            if opts.rate
+                v_dr = (1.2 / 3)^2 / 3;             % variance of each
+                var.psrr.prop = v_dr * ones(1,n);   % assign variance
+                var.psrr.mdl  = v_dr * ones(1,n);
+                var.psrr.clk  = v_dr * ones(1,n);
+                e_dr = mvnrnd(zeros(3*n, 1), v_dr); % get 3 RVs
+                err.psrr.prop = e_dr(1:n)';         % assign RVs to have error
+                err.psrr.mdl  = e_dr(n+1:2*n)';
+                err.psrr.clk  = e_dr(2*n+1:3*n)';
+            end
+        end
+
+        function [err,var,mask,los] = getSISE(obj,tt,ts,user,opts)
+            %GETSISE Return the signal in space error for the satellite to
+            %the given user in high fidelity, including a detailed
+            %time-varying breakdown of error sources.
+            %   Input:
+            %    - tt; signal transmission times, seconds past J2000
+            %    - ts; signal reception times, seconds past J2000
+            %    - user; User object instance
+            %    - opts; s/c settings struct all fields must be set:
+            %       - rate; logical, can receiver measure range-rate?
+            %       - cadence (see generatemodels input)
+            arguments
+                obj     (1,1)   NavSatellite
+                tt      (1,:)   double
+                ts      (1,:)   double
+                user    (1,1)   User
+                opts    (1,1)   struct
+            end
+
+            n = length(ts);     % no. of measurements
+            % Whether it's a PLL or FLL, signal frequency is not observed
+            % directly; rather it's measured as a difference of two phases.
+            % Thus, clock states need to be obtained at measurement
+            % spacings.
+            if opts.rate
+                % determine rate measurement spacing (carrier predetection
+                % integration time, unless Tm is specified / larger)
+                if user.rec.T_c > user.rec.Tm
+                    Tm = user.rec.T_c;
+                else
+                    Tm = user.rec.Tm;
+                end
+
+                % catch if Tm is too large
+                if ts(1)-Tm < obj.prop.t0 || ts(1)-Tm < obj.clock.t0
+                    error("observemeas:invalidStartMeas", ...
+                        "First measurement must be >= User.rec.Tm past starting epoch.");
+                end
+
+                % interleave times
+                tt_old = tt;
+                tt = union(tt_old-Tm, tt_old);
+                it = ismember(tt, tt_old);
+                it_Tm = ismember(tt, tt_old-Tm);
+                ts_old = ts;
+                ts = union(ts_old-Tm, ts_old);
+                is = ismember(ts, ts_old);
+                is_Tm = ismember(ts, ts_old-Tm);
+            end
+
+            % get user state info for measurements
+            xref = obj.getrefstates(tt, 'J2000');
+            xuser = user.getstates(ts, 'J2000');
+            [xmdl,xprop,Pmdl,Pprop] = obj.generatemodels(tt, opts.cadence);
+
+            if opts.rate
+                % get nav message update intervals as they were assigned in
+                % .generatemodels()
+                mask = ones(2,n);
+                I = NavSatellite.getupdateindices(tt,opts.cadence);
+                tI =  tt(union(I(1,:), I(2,:)));
+
+                % un-interleave times
+                tt = tt(it);
+                ts = ts(is);
+
+                % with measurement transmit times, compute which need to be
+                % masked based on if they were within Tm of a nav message
+                % update
+                mat = tt - tI';
+                mask(2,:) = and(mask(2,:), ~any(and(mat >= 0, mat <= Tm)));
+
+                % separate states
+                % store concatenated data and create 2-page 3D matrices, then
+                % un-interleave data, storing in 2 separate pages of matrix
+                % first tt(i)-Tm comes, then tt(i), so store first value on 
+                % second page and second on first page
+                xref = cat(3, xref(:,it), xref(:,it_Tm));
+                xuser = cat(3, xuser(:,is), xuser(:,is_Tm));
+                xmdl = cat(3, xmdl(:,it), xmdl(:,it_Tm));
+                xprop = cat(3, xprop(:,it), xprop(:,it_Tm));
+                % remove tt-Tm data from covariances
+                Pmdl = Pmdl(:,:,it);
+                Pprop = Pprop(:,:,it);
+
+                % store properly organized data
+                obj.xr = xref(:,:,1);
+                obj.tr = tt;
+                user.xs = xuser(:,:,1);
+                user.ts = ts;
+            end
+
+            psr_units = 1e3;    % convert distances from km to m
+            psrr_units = 1e6;   % convert speeds from km/s to mm/s
+
+            % create line-of-sight direction
+            los = xref(1:3,:,1) - xuser(1:3,:,1);
+            los = los ./ sqrt(sum(los.^2, 1));
+
+            % computer state errors from propagation and model
+            err_prop = xprop - xref;
+            err_mdl = xmdl - xprop;
+
+            % project error onto line-of-sight direction
+            err.psr.prop = zeros(1,n);      % pseudorange error from nav uncertainty propagation
+            err.psr.mdl = zeros(1,n);       % pseudorange error from model fitting
+            if opts.rate
+                err.psrr.prop = zeros(1,n); % Doppler error from nav uncertainty propagation
+                err.psrr.mdl = zeros(1,n);  % Doppler error from model fitting
+            end
+
+            for i=1:n
+                err.psr.prop(i) = err_prop(1:3,i,1)' * los(:,i) * psr_units;
+                err.psr.mdl(i) = err_mdl(1:3,i,1)' * los(:,i) * psr_units;
+
+                if opts.rate    % range-rate measurements capable
+                    err.psrr.prop(i) = err_prop(4:6,i,1)'*los(:,i) * psrr_units;
+                    err.psrr.mdl(i) = err_mdl(4:6,i,1)'*los(:,i) * psrr_units;
+                end
+            end
+            % pseudorange error from clock model
+            err.psr.clk = (err_mdl(7,:,1) + err_prop(7,:,1));
+            % velocity error from clock model
+            if opts.rate        % receiver is capable of measuring rate
+                err.psrr.clk = (err_mdl(7,:,1)-err_mdl(7,:,2) + ...
+                    err_prop(7,:,1)-err_prop(7,:,2)) / Tm * 1e3;    % m/s to mm/s
+                % err.psrr.clk = ((err_mdl(8,:,1) + err_prop(8,:,1))) * obj.c * 1e3;   % s/s to mm/s
+            end
+
+            % project uncertainty onto line-of-sight direction
+            var.psr.prop = zeros(1,n);      % pseudorange uncertainty from nav
+            var.psr.mdl = zeros(1,n);       % pseudorange uncertainty from model
+            if opts.rate
+                var.psrr.prop = zeros(1,n); % Doppler uncertainty from nav
+                var.psrr.mdl = zeros(1,n);  % Doppler uncertainty from model
+            end
+
+            for i=1:n
+                % pseudorange uncertainty from ephemeris, in m^2
+                var.psr.prop(i) = los(:,i)' * Pprop(1:3,1:3,i) * los(:,i) * psr_units^2;
+                var.psr.mdl(i) = los(:,i)' * Pmdl(1:3,1:3,i) * los(:,i) * psr_units^2;
+
+                if opts.rate
+                    % Doppler uncertainty from ephemeris, in mm^2/s^2
+                    var.psrr.prop(i) = los(:,i)' * Pprop(4:6,4:6,i) * los(:,i) * psrr_units^2;
+                    var.psrr.mdl(i) = los(:,i)' * Pmdl(4:6,4:6,i) * los(:,i) * psrr_units^2;
+                end
+            end
+            % pseudorange uncertainty from clock model, in m^2
+            var.psr.clk_offset = reshape(Pmdl(7,7,:) + Pprop(7,7,:), [1 n 1]);
+            % implement phase noise here if ya want
+            var.psr.clk_stability = zeros(size(var.psr.clk_offset));
+            % getjitter() or etc.
+            var.psr.clk = var.psr.clk_offset + var.psr.clk_stability;
+
+            % velocity uncertainty from clock model
+            % Added frequency offset error as well!! We trust the LNSS
+            % sats so when a receiver is comparing frequencies, it'll
+            % assume its own is wrong. Thus the frequency offset is
+            % mistakenly conferred onto the user or it throws off
+            % velocity measurements. The allan variance is just noise
+            % on top of frequency offset measurements, so since we are
+            % directly attempting to measure the frequency that noise
+            % is applied to our estimates + the offset!
+            if opts.rate
+                % Doppler uncertainty from s/c clock, in mm^2/s^2
+                var.psrr.clk_offset = reshape(Pmdl(8,8,:) + Pprop(8,8,:), [1 n 1]) * (1e3)^2;
+                var.psrr.clk_stability = ones(1,n) * obj.clock.stability(Tm) * (1e3)^2;
+                var.psrr.clk = var.psrr.clk_offset + var.psrr.clk_stability;
+            end
+        end
+
+        function [erec,vrec,mask] = getUEE(obj,ts,r,dr,user,los,mask)
+            %GETUEE Returns the user equipment error for a given set of
+            %parameters.
+            %   Input:
+            %    - ts; measurement times in seconds past J2000
+            %    - r; transmitter-receiver ranges (m) to compute error for
+            %    - dr; transmitter-receiver range-rates (mm/s)
+            %    - user; User object instance
+            %    - los; line-of-sight direction from user to satellite
+            %    - mask; pre-existing mask for range and -rate measurements
+            arguments
+                obj     (1,1)   NavSatellite
+                ts      (1,:)   double
+                r       (1,:)   double {mustBePositive}
+                dr      (1,:)   double
+                user    (1,1)   User
+                los     (3,:)   double
+                mask    (2,:)   double = []
+            end
+
+            % compute link budget and receiver noise
+            CN0 = obj.linkbudget(user, r);
+            % add mask to link budget %
+            % get nadir direction at user at each time step
+            nadir = user.xs(1:3,:) ./ sqrt(sum(user.xs(1:3,:).^2, 1));
+            % get zenith direction at sat at each time step
+            zenith = -obj.xr(1:3,:) ./ sqrt(sum(obj.xr(1:3,:).^2, 1));
+            % compute angle between nadir and satellite
+            tosat = acos(sum(nadir .* los, 1));
+            touser = acos(sum(zenith .* -los, 1));
+            % -300 dB/Hz if angle is over off-boresight mask angle
+            CN0 = CN0 - 300 * (tosat > pi/2 - user.ant.mask);
+            CN0 = CN0 - 300 * (touser > pi/2 - obj.ant.mask);
+            % if 1
+            %     RP = CN0(CN0 > -200);
+            %     figure();
+            %     plot(RP);
+            %     fprintf("max: %f\nmin: %f\n", max(RP), min(RP));
+            % end
+            [erec, vrec, mask1] = user.rec.noise(CN0, ts, r, dr, obj.clock);
+
+            % build and assign mask
+            if ~isempty(mask)
+                mask = and(mask1, mask);
+            else
+                mask = mask1;
+            end
+
+            % plot CN0 for simulation
+            if obj.DEBUG
+                figure();
+                plotformat("APA", 0.4, "scaling", 1, "coloring", "science");
+                elev = (pi/2 - tosat) * 180/pi;
+                plot(elev(mask(1,:)), CN0(mask(1,:)), "LineWidth", 2);
+                grid on;
+                xlabel("Elevation angle (\circ)");
+                ylabel("C/N0 (dB-Hz)");
+                title("C/N0 vs. User Antenna Elevation Angle");
+
+                figure();
+                plotformat("APA", 0.4, "scaling", 1, "coloring", "science");
+                plot(tosat(mask(1,:)) * 180/pi, touser(mask(1,:)) * 180/pi, "LineWidth", 2);
+                grid on;
+                xlabel("User off-boresight angle (\circ)");
+                ylabel("Satellite off-boresight angle (\circ)");
+
+            end
+        end
+    end
+
     methods (Static, Access = private)
         function I = getupdateindices(ts,cadence)
             %GETUPDATEINDICES Returns indices of ts where ephemeris and
@@ -798,6 +996,51 @@ classdef NavSatellite < handle
     end
 
     methods (Static)
+        function tlabel = sandpile3D(t,data,item)
+            %SANDPILE3D Plots a sandpile-looking breakdown of data on the
+            %current 3D figure. Part of a larger figure, so does not format
+            %the current figure at all.
+            %   Input:
+            %    - t; timestamps of data in seconds
+            %    - data; rows are contributors, cols are timestamps t
+            %    - item; number of item to plot on y axis
+            arguments
+                t       (1,:)   double
+                data    (:,:)   double {mustBeNonnegative}
+                item    (1,1)   {mustBeNonnegative,mustBeInteger}
+            end
+
+            colors = colororder;            % get colors for plotting
+            c = size(colors,1);
+            t = t - t(1);                   % normalize to 0
+            units = "(s)";                  % default to seconds
+            if t(end) >= 120 && t(end) < 120 * 60   % if 1min <= t < 120min, units are minutes
+                t = t / 60;
+                units = "(min)";
+            elseif t(end) < 48 * 3600               % if 2hr <= t < 48hr, units are hours
+                t = t / 3600;
+                units = "(hrs)";
+            elseif t(end) >= 2 * 86400              % if t >= 2d, units are days
+                t = t / 86400;
+                units = "(days)";
+            end
+
+            m = size(data,1);                       % number of contributors
+            px = [t flip(t)];                       % x data
+            py = item * ones(1, length(px));        % position
+            data = [zeros(1,size(data,2)); data];   % add buffer row
+            for i=1:m                               % plot patches
+                data(i+1,:) = data(i+1,:) + data(i,:);  % add data
+                pz = [data(i,:) flip(data(i+1,:))];     % z data
+                color = colors(mod(i-1,c)+1,:);         % get color
+                patch(px, py, pz, color, "EdgeColor", "none");
+                if i == 1, hold on; end
+            end
+
+            % return what the time label should be
+            tlabel = "Time " + units;           
+        end
+
         function sandpile(t,data,labels,ytext,tlabel)
             %SANDPILE Plots a sandpile-looking breakdown of data on the
             %current figure.

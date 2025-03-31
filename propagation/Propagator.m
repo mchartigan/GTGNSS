@@ -37,6 +37,20 @@ classdef (Abstract) Propagator < handle
             % square matrix to column vector
             dP = reshape(dP, obj.dim*obj.dim, 1);   
         end
+
+        function handle = statetotrajectory(obj)
+            %STATETOTRAJECTORY Converts the last propagation to a
+            %spline-interpolated trajectory handle.
+            arguments
+                obj (1,1)   Propagator
+            end
+
+            data = obj.xs;
+
+            % convert trajectory into splines
+            pp = spline(obj.ts, data);
+            handle = @(tau) ppval(pp, tau);
+        end
     end
     
     methods (Abstract)

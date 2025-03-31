@@ -50,6 +50,31 @@ classdef LunarPropagator < OrbitPropagator
             % estimate noise, Q
             obj.var = diag([[0 0 0] [1 1 1]*3e-5/ord].^2);
 
+            % preallocate information if it was requested
+            if ~isempty(obj.t_pre)
+                % generate rotation matrices
+                T_J2PA = cspice_pxform('J2000', obj.pri.frame, obj.t_pre);
+
+                % convert rotation matrices to quaternions
+                l = length(obj.t_pre);
+                temp = zeros(l,4);
+                for j=1:l
+                    temp(j,:) = rotm2quat(T_J2PA(:,:,j));
+                end
+                obj.q_I2F = quaternion(temp(:,1)', temp(:,2)', temp(:,3)', temp(:,4)');
+
+                % change planet positions to piecewise polynomials
+                x_pri = obj.pri.x(obj.t_pre);
+                pp_pri = spline(obj.t_pre, x_pri);
+                obj.pri.x = @(tau) ppval(pp_pri, tau);
+                
+                for j=1:length(obj.sec)
+                    x_secj = obj.sec(j).x(obj.t_pre);
+                    pp_secj = spline(obj.t_pre, x_secj);
+                    obj.sec(j).x = @(tau) ppval(pp_secj, tau);
+                end
+            end
+
             % Parse x0
             errmsg = "x0 must be either an array of OE structs, (6,n) " + ...
                     "array of starting states, or xopt output from Conopt(2)";

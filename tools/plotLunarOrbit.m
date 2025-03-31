@@ -47,6 +47,7 @@ for k=1:size(sats,3)
 end
 
 grid on; axis equal;
+if strcmp(plot_frame, 'J2000'), plot_frame = 'ICRF'; end
 SUB = strsplit(plot_frame,"_");
 SUB = SUB(end);
 xlabel("x_{"+SUB+"} (km)");

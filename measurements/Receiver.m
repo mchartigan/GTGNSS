@@ -3,7 +3,7 @@ classdef Receiver < handle
     %and carrier tracking loops.
     
     properties
-        % receiver clock %
+        % receiver clock, units in m %
         clock       (1,1)   Clock = Clock(0,zeros(3,1),"none")
 
         % signal characteristics %
@@ -13,7 +13,7 @@ classdef Receiver < handle
         Rc          (1,1)   double {mustBePositive} = 5.115e6
 
         % code tracking loop characteristics %
-        % code tracking loop order (first- or second-order)
+        % code tracking loop order (first-, second-, or third-order)
         codeorder   (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(codeorder,4)} = 2
         % is data present on signal? (i.e. does it have a nav msg or is it a 
         % pilot channel?) 1 - yes, 0 - no
@@ -75,7 +75,7 @@ classdef Receiver < handle
             obj.carrier = carrierloop;
         end
 
-        function [err,var,track] = noise(obj,CN0,ts,r,dr)
+        function [err,var,track] = noise(obj,CN0,ts,r,dr,satclock)
             %NOISE Returns the range and range-rate error (and variance) of
             %the receiver measurements.
             %   Input:
@@ -83,6 +83,7 @@ classdef Receiver < handle
             %    - ts; eval time steps, seconds past J2000
             %    - r; transmitter-receiver ranges (m) to compute error for
             %    - dr; transmitter-receiver range-rates (mm/s)
+            %    - satclock; satellite's Clock object
             %   Output:
             %    - err; random zero-mean variables with variance vrec,
             %           first row is range (m) and second is range-rate (mm/s)
@@ -90,11 +91,12 @@ classdef Receiver < handle
             %           measurements (mm^2/s^2)
             %    - track; is the receiver within its tracking thresh.?
             arguments
-                obj     (1,1)   Receiver
-                CN0     (1,:)   double
-                ts      (1,:)   double
-                r       (1,:)   double {mustBePositive}
-                dr      (1,:)   double
+                obj         (1,1)   Receiver
+                CN0         (1,:)   double
+                ts          (1,:)   double
+                r           (1,:)   double {mustBePositive}
+                dr          (1,:)   double
+                satclock    (1,1)   Clock
             end
 
 
@@ -124,7 +126,7 @@ classdef Receiver < handle
                           (1 + obj.data*1./(obj.T*CN0));
                 end
 
-                % set uncertainty from clock phase noise to 0 cuz it is
+                % set uncertainty from clock phase noise to zero cuz it is
                 var.clk = zeros(size(var.thermal));
                 var.dyn = zeros(size(var.thermal));     % initialize DSE
 
@@ -178,14 +180,14 @@ classdef Receiver < handle
                         dyn = ddr;
 
                         % add oscillator phase noise
-                        vdop.clk = (lambda/2.5/obj.Bn_c * obj.freq)^2 * ...
+                        vdop.clk = (lambda/2.5/obj.Bn_c * obj.freq)^2 / obj.c^2 * ...
                             obj.clock.stability(1/obj.Bn_c) * ones(size(vdop.thermal));
                     case 3
                         w0 = obj.Bn_c / 0.7845;
                         dyn = dddr;
 
                         % add oscillator phase noise
-                        vdop.clk = (lambda/2.25/obj.Bn_c * obj.freq)^2 * ...
+                        vdop.clk = (lambda/2.25/obj.Bn_c * obj.freq)^2 / obj.c^2 * ...
                             obj.clock.stability(1/obj.Bn_c) * ones(size(vdop.thermal));
                     otherwise
                         error("noise:invalidCarrierOrder", ...
@@ -195,8 +197,6 @@ classdef Receiver < handle
                 % add dynamic stress error
                 vdop.dyn = (abs(dyn) / (3*w0^obj.carrierorder)).^2;
                 vdop.total = vdop.thermal + vdop.clk + vdop.dyn;
-                % don't add reference satellite clock jitter, it's
-                % negligible in most instances really
 
                 % compute validity (assume ATAN2 discriminator)
                 track = [track; 3*sqrt(vdop.total) <= lambda / (4*(1+obj.data))];

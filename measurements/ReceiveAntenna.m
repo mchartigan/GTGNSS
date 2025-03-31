@@ -2,8 +2,6 @@ classdef ReceiveAntenna < Antenna
     %RECEIVEANTENNA Properties specific to receiving antenna
     
     properties
-        % rad, antenna mask angle (pi/2 - off-boresight angle)
-        mask    (1,1)   double = 5 * pi/180;
         % dB, system losses in receiver (default no losses)
         As      (1,1)   double = 0
         % K, noise temperature of antenna [default 150K, ballpark temp of

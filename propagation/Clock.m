@@ -20,6 +20,7 @@ classdef Clock < Propagator
         seed    (1,1)   {mustBeInteger} = 0;
         % should debug output be used?
         DEBUG   (1,1)   {mustBeNonnegative,mustBeInteger} = 0
+        norm    (1,1)   double = 1
         
     end
     properties (SetAccess = private)
@@ -45,9 +46,11 @@ classdef Clock < Propagator
             %    - x0; starting state, [bias (s); drift (s/s); aging (1/s)]
             %    - name; string, see Clock.assignclockdata() for options
             %    - debug; optional name-value pair (default false), print debug
-            %             output
-            %    - fit; optional name-value pair (default "Allan"), model
-            %           fit for short-term stability data
+            %       output
+            %    - fit; optional name-value pair (default "Allan"), model fit 
+            %       for short-term stability data
+            %    - normalize; optional name-value pair (default "false"),
+            %       multiply state by the speed of light to improve estimation
             arguments
                 t0      (1,1)   double
                 x0      (3,1)   double
@@ -68,6 +71,8 @@ classdef Clock < Propagator
                         obj.DEBUG = varargin{i+1};
                     elseif strcmp(varargin{i}, "fit")
                         obj.type = varargin{i+1};
+                    elseif strcmp(varargin{i}, "normalize")
+                        if varargin{i+1}, obj.norm = obj.c; end
                     end
                 end
             elseif nargin < 3
@@ -79,13 +84,15 @@ classdef Clock < Propagator
                 error("Clock:invalidType", "Clock type must either be string.");
             end
 
-            if strcmpi(name, "none")    % no clock (default initialization)
+            if strcmpi(name, "none")        % no clock (default initialization)
                 return
-            else                        % get from supported clocks
+            else                            % get from supported clocks
                 obj.assignclockdata(name);
             end
 
             obj.seed = randi([1 1e9]);
+            obj.Q = obj.Q .* obj.norm^2;    % normalize by c if requested
+            obj.a = obj.a * obj.norm;
         end
 
         function [ts,xs,vs] = run(obj,tf,n)
@@ -127,8 +134,7 @@ classdef Clock < Propagator
             % initialize variables
             n = length(ts);
             xs = zeros(3,n);
-            % scale by c^2 to improve integration
-            xs(:,1) = obj.x0 * obj.c^2;
+            xs(:,1) = obj.x0;
             vs = zeros(3,3,n);
 
             for i=2:n
@@ -139,13 +145,10 @@ classdef Clock < Propagator
                 J = mvnrnd([0 0 0], obj.dtcovariance(dt), 1)';
                 % covariance of x at ts(i)
                 vs(:,:,i) = obj.dtcovariance(ts(i)); 
-                % scale J by c^2 to improve integration
-                xs(:,i) = stm * xs(:,i-1) + J * obj.c^2;
+                xs(:,i) = stm * xs(:,i-1) + J;
             end
 
             obj.ts = ts + obj.t0;
-            % rescale xs back by c^2
-            xs = xs ./ obj.c^2;
             obj.xs = xs;
         end
 
@@ -180,7 +183,8 @@ classdef Clock < Propagator
         function s = stability(obj,dt)
             %STABILITY Returns the short-term stability of the oscillator
             %at the given measurement interval. Either Allan or Hadamard
-            %variance(! not deviation), in (s/s)^2.
+            %variance(! not deviation), in (s/s)^2 or (m/s)^2, depending on
+            %normalization.
             %   Input:
             %    - dt; measurement interval in s
             arguments
@@ -343,11 +347,11 @@ classdef Clock < Propagator
             %datasheets.
             %   Inputs:
             %    - fc; carrier frequency (to determine multiplication of
-            %          clock frequency needed
+            %          clock frequency needed)
             %    - Bn; carrier loop noise bandwidth
             %   Outputs:
             %    - err; sample error, in rad
-            %    - var; variance of clock jitter, radians^2
+            %    - var; variance of clock jitter, rad^2
             %
             %   Ref: Zucca, C. and Tavella, P.; doi.org/10.1109/TUFFC.2005.1406554
             arguments
@@ -356,7 +360,8 @@ classdef Clock < Propagator
                 Bn  (1,1)   double {mustBePositive}
             end
 
-            Bn = Bn / 2;        % noise bandwidth presumed two-sided, so get one side
+            % noise bandwidth presumed two-sided, so get one side
+            Bn = Bn / 2;        
             N = fc / obj.f;
             noise = 10.^((obj.n_noise + 20*log10(N))/10);
             n_Bn = interp1(obj.f_noise, noise, Bn);
@@ -364,9 +369,8 @@ classdef Clock < Propagator
             f_int = [obj.f_noise(ii) Bn];
             n_int = [noise(ii) n_Bn];
             A = trapz(f_int, n_int);
-            A = 10*log10(A);
             
-            var = 2*10^(A/10) * (Clock.c/(fc*2*pi))^2;
+            var = 2*A;
             err = mvnrnd(0, var);
         end
 
