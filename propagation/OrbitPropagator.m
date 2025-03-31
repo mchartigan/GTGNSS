@@ -40,6 +40,10 @@ classdef OrbitPropagator < Propagator
         % spherical harmonics)
         q_I2F   (1,:)   quaternion
     end
+    properties(Access=private)
+        % precomputed factorial for harmonics calculations %
+        fact (:,:) = 0
+    end
     properties (Constant, Access=private)
         % solar radiation pressure constants %
         % kN/m^2 (Pa), solar radiation pressure at Earth, given by the solar
@@ -120,6 +124,11 @@ classdef OrbitPropagator < Propagator
             else
                 obj.t0 = cspice_str2et(t0);
             end
+
+            % precompute factorial for harmonics
+            n = 1:ord+1; m = 1:ord+1;
+            m = m(2:end);
+            obj.fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
         end
         
         function [ts,xs,fail] = run(obj,tf,n,frame,assign)
@@ -542,10 +551,6 @@ classdef OrbitPropagator < Propagator
             %
             %   Input:
             %    - x; position vector of point (3,) [km]
-            arguments
-                obj (1,1)   OrbitPropagator
-                x   (3,1)   double
-            end
         
             nn = obj.ord;       % max degree (and order m) of harmonics
             mu = obj.pri.GM;    % km^3/s^2, gravitational parameter of body
@@ -562,11 +567,10 @@ classdef OrbitPropagator < Propagator
                     trace((n'-m+1) * (C(n,m).*V(n+1,m) + S(n,m).*W(n+1,m))')];
         
             m = m(2:end);
-            fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
             f(1) = f(1) + A/2 * trace((C(n,m)*V(n+1,m+1)' + S(n,m)*W(n+1,m+1)') ...
-                   - fact * (C(n,m).*V(n+1,m-1) + S(n,m).*W(n+1,m-1))');
+                   - obj.fact * (C(n,m).*V(n+1,m-1) + S(n,m).*W(n+1,m-1))');
             f(2) = f(2) + A/2 * trace((C(n,m)*W(n+1,m+1)' - S(n,m)*V(n+1,m+1)') ...
-                   + fact * (C(n,m).*W(n+1,m-1) - S(n,m).*V(n+1,m-1))');
+                   + obj.fact * (C(n,m).*W(n+1,m-1) - S(n,m).*V(n+1,m-1))');
         end
 
         function [V,W] = VandW(obj,x,nn)
