@@ -230,6 +230,39 @@ classdef MarkovClock < Propagator
             obj.n_noise = data.phase_noise.noise;
         end
 
+        function [err,var] = getjitter(obj,fc,Bn)
+            %GETJITTER Returns the jitter noise of a clock at a specific noise
+            %bandwidth, based on the phase noise statistics provided in the 
+            %datasheets.
+            %   Inputs:
+            %    - fc; carrier frequency (to determine multiplication of
+            %          clock frequency needed)
+            %    - Bn; carrier loop noise bandwidth
+            %   Outputs:
+            %    - err; sample error, in rad
+            %    - var; variance of clock jitter, rad^2
+            %
+            %   Ref: Zucca, C. and Tavella, P.; doi.org/10.1109/TUFFC.2005.1406554
+            arguments
+                obj (1,1)   MarkovClock
+                fc  (1,1)   double {mustBePositive}
+                Bn  (1,1)   double {mustBePositive}
+            end
+
+            % noise bandwidth presumed two-sided, so get one side
+            Bn = Bn / 2;        
+            N = fc / obj.f;
+            noise = 10.^((obj.n_noise + 20*log10(N))/10);
+            n_Bn = interp1(obj.f_noise, noise, Bn);
+            ii = find(obj.f_noise < Bn);
+            f_int = [0; obj.f_noise(ii); Bn];
+            n_int = [noise(1); noise(ii); n_Bn];
+            A = trapz(f_int, n_int);
+            
+            var = 2*A;
+            err = mvnrnd(0, var);
+        end
+
         function [fx,C] = modelfit(obj)
             %MODELFIT Returns a second-order polynomial model for the clock
             %state over time. Starting epoch is the current t0, x0
