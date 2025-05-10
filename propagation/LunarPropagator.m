@@ -35,7 +35,8 @@ classdef LunarPropagator < OrbitPropagator
             obj = obj@OrbitPropagator(t0, ord, varargin);
             
             cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
-            [R,C,S,norms] = cofloader("LP165P.cof", false);
+            % [R,C,S,norms] = cofloader("LP165P.cof", false);
+            [R,C,S,norms] = sha_loader("gggrx_0900c_sha.tab", 200);
             
             % planetary info
             bods = getplanets('MOON', "MOON", "EARTH", "SUN", "JUPITER");
