@@ -39,6 +39,8 @@ classdef MarkovClock < Propagator
         t_stab      (:,1)   double {mustBePositive} = []
         % s/s, stability (standard deviations)
         s_stab      (:,1)   double {mustBePositive} = []
+        % s/s, stability (standard deviations) from Hadamard deviations
+        s_had       (:,1)   double {mustBePositive} = []
         % Hz, phase noise frequency offsets
         f_noise     (:,1)   double {mustBePositive} = []
         % dBc/Hz, phase noise
@@ -226,6 +228,7 @@ classdef MarkovClock < Propagator
             obj.a = data.aging / 86400;     % convert s/s/day -> s/s/s
             obj.t_stab  = data.stability.int;
             obj.s_stab  = data.stability.dev;
+            obj.s_had   = data.stability.hadamard;
             obj.f_noise = data.phase_noise.freq;
             obj.n_noise = data.phase_noise.noise;
         end
