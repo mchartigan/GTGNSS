@@ -464,7 +464,7 @@ classdef NavSatellite < handle
                 err.psrr.uee = err.psrr.rec;
                 % total error is sum of SISE and UEE
                 err.psrr.total = err.psrr.sise + err.psrr.uee;
-                true.psrr = dr + (user.xs(8,:) - obj.xr(8,:))*1e3;  % xs(8) in m/s
+                true.psrr = dr + (user.xs(8,:) - obj.xr(8,:))*1e3;  % xs(8) in mm/s
                 meas.psrr = true.psrr + err.psrr.total;
             end
 
@@ -1033,7 +1033,7 @@ classdef NavSatellite < handle
                 data(i+1,:) = data(i+1,:) + data(i,:);  % add data
                 pz = [data(i,:) flip(data(i+1,:))];     % z data
                 color = colors(mod(i-1,c)+1,:);         % get color
-                patch(px, py, pz, color, "EdgeColor", "none");
+                patch(px, py, pz, color, "EdgeColor", "k");
                 if i == 1, hold on; end
             end
 

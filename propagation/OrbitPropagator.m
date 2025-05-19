@@ -176,7 +176,12 @@ classdef OrbitPropagator < Propagator
                 [~,X] = ode89(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
                 X = X(2:end,:)';
                 % catch and bounce if propagation failed
-                if size(X,2) ~= n, fail = 1; return; end
+                if size(X,2) < n
+                    fail = 1;
+                    return;
+                elseif n == 1
+                    X = X(:,end);
+                end
 
                 if ~strcmp(frame, 'J2000')  % transform if necessary
                     for j=1:length(ts)

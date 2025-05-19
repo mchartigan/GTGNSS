@@ -23,6 +23,8 @@ classdef MarkovClock < Propagator
         sigma_w     (1,1)   double {mustBeNonnegative} = 0
         % random walk frequency noise
         sigma_rw    (1,1)   double {mustBeNonnegative} = 0
+        % random run frequency noise
+        sigma_rr    (1,1)   double {mustBeNonnegative} = 0
         % frequency drift (aging rate) uncertainty
         sigma_a     (1,1)   double {mustBeNonnegative} = 0
         % Markov process noise
@@ -67,9 +69,9 @@ classdef MarkovClock < Propagator
             % assign uncertainties
             obj.sigma_w  = minout.x(1) * obj.c;
             obj.sigma_rw = minout.x(2) * obj.c;
-            % if output is odd, it means aging uncertainty was fit
+            % if output is odd, it means random run FM was fit
             fit_a = mod(length(minout.x), 2);
-            obj.sigma_a = minout.x(3) * fit_a * obj.c;
+            obj.sigma_rr = minout.x(3) * fit_a * obj.c;
             % assign set number of Markov processes
             obj.m = (length(minout.x) - 2 - fit_a)/2;
             obj.sigma_m = zeros(obj.m, 1);
@@ -186,12 +188,17 @@ classdef MarkovClock < Propagator
                 obj (1,1)   MarkovClock
                 tau (1,1)   double {mustBeNonnegative}
             end
+
+            s1 = obj.sigma_w;
+            s2 = obj.sigma_rw;
+            s3 = obj.sigma_rr;
             
             Q = zeros(obj.dim, obj.dim);
             % traditional white + random walk model
-            Q(1:2,1:2) = ...
-                [obj.sigma_w^2*tau + obj.sigma_rw^2/3*tau^3 obj.sigma_rw^2/2*tau^2
-                                     obj.sigma_rw^2/2*tau^2     obj.sigma_rw^2*tau];
+            Q(1:3,1:3) = ...
+                [s1^2*tau + s2^2/3*tau^3 + s3^2/20*tau^5, s2^2/2*tau^2 + s3^2/8*tau^4, s3^2/6*tau^3
+                            s2^2/2*tau^2 + s3^2/8 *tau^4, s2^2  *tau   + s3^2/3*tau^3, s3^2/2*tau^2
+                                           s3^2/6 *tau^3,                s3^2/2*tau^2, s3^2*tau    ];
             % contributions from Markov processes
             for i=1:obj.m
                 Q(1,1) = Q(1,1) + obj.sigma_m(i)^2 * ...
