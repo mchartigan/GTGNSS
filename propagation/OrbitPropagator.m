@@ -262,6 +262,7 @@ classdef OrbitPropagator < Propagator
             else
                 T = cspice_pxform('J2000', obj.pri.frame, t);
             end
+            T = eye(3);
 
             % get nonspherical gravity effects
             x_me = T * x_1s;
