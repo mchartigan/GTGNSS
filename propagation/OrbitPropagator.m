@@ -8,22 +8,12 @@ classdef OrbitPropagator < Propagator
         pri     (1,1)   struct
         % array of structs containing info about additional planets to consider
         sec     (1,:)   struct
-        % starting time of sim, seconds past J2000
-        t0
-        % starting states of satellites @ t0 in J2000 frame
-        x0
-        % dimension of state
-        dim             = 6
         % max degree/order of gravity model to use
         ord     (1,1)   {mustBeInteger,mustBePositive} = 1
-        % number of satellites
-        nsats   (1,1)   {mustBePositive,mustBeInteger} = 1
         % ODE45 options
         opts    (1,1)   struct
-        % info stored from latest run (if frame == '', no run yet)
-        ts
-        xs
-        frame   (1,:)   char = ''
+        % dimension of state
+        dim     = 6
 
         % solar radiation pressure variables %
         % coefficient of reflectivity
@@ -40,7 +30,7 @@ classdef OrbitPropagator < Propagator
         % spherical harmonics)
         q_I2F   (1,:)   quaternion
     end
-    properties(Access=private)
+    properties (Access=private)
         % precomputed factorial for harmonics calculations %
         fact (:,:) = 0
     end
@@ -60,10 +50,9 @@ classdef OrbitPropagator < Propagator
     end
     
     methods
-        function obj = OrbitPropagator(t0,ord,varargin)
+        function obj = OrbitPropagator(ord,varargin)
             %ORBITPROPAGATOR Construct an OrbitPropagator instance.
             %   Inputs:
-            %    - t0; character string, 'DD-MMM-YYYY XX:XX:XX'
             %    - ord; maximum degree and order of gravity model to use
             %    - opts; optional name-value arg, ODE45 integration tolerances
             %    - Cr; optional name-value arg, coefficient of reflectivity
@@ -79,7 +68,6 @@ classdef OrbitPropagator < Propagator
             %       encompass any propagation intervals called in the
             %       future, otherwise errors will occur.
             arguments
-                t0      (1,:)
                 ord     (1,1)   {mustBeInteger,mustBePositive}
             end
             arguments (Repeating)
@@ -90,7 +78,7 @@ classdef OrbitPropagator < Propagator
             obj.ord = ord;
             obj.opts = odeset("RelTol", 1e-9, "AbsTol", 1e-11);
             obj.t_pre = [];
-            default = 2;
+            default = 1;
             try
                 varargin = varargin{1};
             catch
@@ -118,63 +106,58 @@ classdef OrbitPropagator < Propagator
                 error("OrbitPropagator:nargin", "Too few arguments.");
             end
 
-            % parse start time
-            if isa(t0, 'double')
-                obj.t0 = t0;
-            else
-                obj.t0 = cspice_str2et(t0);
-            end
-
             % precompute factorial for harmonics
             n = 1:ord+1; m = 1:ord+1;
             m = m(2:end);
             obj.fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
         end
         
-        function [ts,xs,fail] = run(obj,tf,n,frame,assign)
-            %RUN Propagate the stored states for tf seconds (n steps
-            %between). Data returned in provided frame.
+        function [ts,xs,fail] = run(obj,ts,x0,n,frame)
+            %RUN Propagate the provided state(s) for ts(2)-ts(1) seconds
+            %(n steps between). Data returned in indicated frame.
             %   Input:
-            %    - tf; final time, seconds past t0
+            %    - ts; [intial time, final time], seconds past J2000
+            %    - x0 (6,:) double; starting state(s) in frame
             %    - n; number of time steps
-            %    - frame; reference frame to return data in
-            %    - assign; optional argument (default true), should
-            %         propagation data be assigned to object properties
+            %    - frame; reference frame of x0; data is also returned in
+            %       this frame
             arguments
                 obj     (1,1)   OrbitPropagator
-                tf      (1,1)   double {mustBePositive}
+                ts      (2,1)   double
+                x0      (6,:)   double
                 n       (1,1)   {mustBeInteger,mustBePositive}
                 frame   (1,:)   char
-                assign  (1,1) = true
             end
 
-            ts = linspace(0, tf, n);
-            [ts,xs,fail] = obj.runat(ts,frame,assign);
+            ts = linspace(ts(1), ts(2), n);
+            [xs,fail] = obj.runat(ts,x0,frame);
         end
 
-        function [ts,xs,fail] = runat(obj,ts,frame,assign)
-            %RUNAT Propagate the stored states over the provided time steps. 
-            %Data returned in provided frame.
+        function [xs,fail] = runat(obj,ts,x0,frame)
+            %RUNAT Propagate the provided states over the provided time steps. 
+            %Data returned in indicated frame.
             %   Input:
-            %    - ts; eval time steps, seconds past t0
-            %    - frame; reference frame to return data in
-            %    - assign; optional argument (default true), should
-            %         propagation data be assigned to object properties
+            %    - ts; eval time steps, seconds past J2000
+            %    - x0; starting states in frame
+            %    - frame; reference frame of x0; data is also returned in
+            %       this frame
             arguments
                 obj     (1,1)   OrbitPropagator
                 ts      (1,:)   double
+                x0      (6,:)   double
                 frame   (1,:)   char
-                assign  (1,1) = true
             end
 
             n = length(ts);
-            ts = obj.t0 + ts;
-            xs = zeros(6,n,obj.nsats);
+            nsats = size(x0, 2);
+            xs = zeros(6,n,nsats);
             fail = 0;       % flag if propagation failed
+            % transform starting state to inertial
             
-            for i=1:obj.nsats
-                [~,X] = ode89(@obj.dynamics, [obj.t0 ts], obj.x0(:,i), obj.opts);
-                X = X(2:end,:)';
+            for i=1:nsats
+                x0 = cspice_sxform(frame, 'J2000', ts(1)) * x0(:,i);
+                [~,X] = ode89(@obj.dynamics, ts, x0, obj.opts);
+                X = X';
                 % catch and bounce if propagation failed
                 if size(X,2) < n
                     fail = 1;
@@ -191,12 +174,6 @@ classdef OrbitPropagator < Propagator
 
                 xs(:,:,i) = X;              % assign to output
             end
-
-            if assign       % only overwrite object properties if requested
-                obj.ts = ts;
-                obj.xs = xs;
-                obj.frame = frame;
-            end
         end
 
         function [ts,xs,fail] = run_prealloc(obj,x0_,ts)
@@ -210,7 +187,7 @@ classdef OrbitPropagator < Propagator
             %    - ODE45 is used instead of ODE89 for speed
             %    - results are not assigned back to the object
             %    - data assumed given/returned in J2000
-            %    - ts are seconds past J2000 rather than past t0
+            %    - ts are seconds past J2000
             %    - generally a bunch of features are stripped out for
             %      efficiency
             %
@@ -241,25 +218,18 @@ classdef OrbitPropagator < Propagator
 
         function dxdt = dynamics(obj,t,x)
             %DYNAMICS Inertial dynamics for a satellite orbiting a primary
-            %body with gravitational influence from a secondary (and tertiary);
-            %includes nonspherical gravity.
+            %body with gravitational influence from a third bodies, 
+            %nonspherical gravity of primary, and SRP.
+            %   Update: removed input validation for speed.
+            %
             %   Input:
-            %    - t; simulation time in seconds past J2000
-            %    - x; state [pos (km); vel (km/s)] of spacecraft
-            %    - pri; struct, {GM: gravitational parameter, x: @(t) position [km]}
-            %           for primary body
-            %    - N; maximum degree and order of harmonics to compute
-            %    - sec; array of struct, {GM: gravitational parameter, x: @(t) position [km]}
-            %           for secondary bodies
-            arguments
-                obj     (1,1)   OrbitPropagator
-                t       (1,1)   double
-                x       (6,1)   double
-            end
+            %    - t (1,1) double; simulation time in seconds past J2000
+            %    - x (6,1) double; state [pos (km); vel (km/s)] of
+            %        spacecraft in J2000
 
             dxdt = zeros(6,1);
             x_1s = x(1:3);
-            r_1s = norm(x_1s);
+            % r_1s = norm(x_1s);
             
             % get transformation from inertial to body-fixed
             if obj.pre
@@ -267,7 +237,6 @@ classdef OrbitPropagator < Propagator
             else
                 T = cspice_pxform('J2000', obj.pri.frame, t);
             end
-            T = eye(3);
 
             % get nonspherical gravity effects
             x_me = T * x_1s;
@@ -359,14 +328,11 @@ classdef OrbitPropagator < Propagator
         function A = partials(obj,t,x)
             %PARTIALS Returns the Jacobian of dynamics w.r.t. x (spherical 
             %harmonics approximated to J2).
+            %   Update: removed input validation for speed.
+            %
             %   Input:
-            %    - t; time, seconds past J2000
-            %    - x_; state [pos (km); vel (km/s)] of spacecraft
-            arguments
-                obj     (1,1)   OrbitPropagator
-                t       (1,1)   double
-                x       (6,1)   double
-            end
+            %    - t (1,1) double; time, seconds past J2000
+            %    - x_ (6,1) double; state [pos (km); vel (km/s)] of spacecraft
             
             x_1s = x(1:3);
             r_1s = norm(x_1s);
@@ -398,28 +364,20 @@ classdef OrbitPropagator < Propagator
             A(4:6,1:3) = A(4:6,1:3) + T * 3*obj.pri.GM*obj.pri.R^2*J2/2 * V1 * T';
         end
 
-        function P = proplyapunov(obj,ts,P0,sv)
-            %PROPLYAPUNOV Propagates Lyapunov equations (obj.lyapunov) from
-            %given to next time and provides covariance matrices.
-            %   Input
-            %    - ts; propagation times, seconds past J2000
-            %    - P0; covariance of state x0
-            %    - sv; (optional) index of space vehicle to propagate for,
-            %          if nsats > 1
+        function P = proplyapunov(obj,ts,x0,P0)
+            %PROPLYAPUNOV Propagates Lyapunov equations (obj.lyapunov) between 
+            %provided times and outputs covariance matrices.
+            %
+            %   Input:
+            %    - ts (1,:) double; propagation times, seconds past J2000
+            %    - x0 (6,1) double; starting state in J2000
+            %    - P0 (6,6) double; covariance of state x0
             arguments
-                obj (1,1) OrbitPropagator
-                ts  (1,:) double
-                P0  (6,6) double
-                sv  (1,1) {mustBePositive,mustBeInteger} = 1
+                obj
+                ts
+                x0  (6,1)   double
+                P0  (6,6)   double
             end
-
-            % catch invalid sv input
-            if sv ~= 1 && sv > obj.nsats
-                error("proplyapunov:invalidInput", ...
-                    "sv must be 1 < sv < obj.nsats.");
-            end
-
-            ts = ts + obj.t0;
 
             n = length(ts);
             P = zeros(obj.dim, obj.dim, n);
@@ -430,7 +388,7 @@ classdef OrbitPropagator < Propagator
             % requires the current state.
             jointdyn = @(t,x) [obj.dynamics(t, x(1:6)); ...
                 obj.lyapunov(x(7:end), obj.partials(t,x(1:6)), 0)];
-            [~,Y] = ode89(jointdyn, ts, [obj.x0(:,sv); P0], obj.opts);
+            [~,Y] = ode89(jointdyn, ts, [x0; P0], obj.opts);
 
             % store covariance matrices in appropriate structure
             for i=1:length(ts)
@@ -438,29 +396,31 @@ classdef OrbitPropagator < Propagator
             end
         end
 
-        function [fx,C] = modelfit(obj,type,dt,N)
+        function [fx,C] = modelfit(obj,traj,t0,type,N)
             %MODELFIT Fits given surrogate model type to propagated data.
             %   Input:
+            %    - traj; Trajectory segment of satellite states
+            %    - t0; starting epoch of model fit
             %    - type; "Kepler" or "polynomial", type of model fit -- fit
-            %            to error from solving Kepler's problem, or entire
-            %            trajectory
-            %    - dt; time after t0 to propagate to
+            %       to error from solving Kepler's problem, or entire trajectory
             %    - N; number of interpolation points
             %   Output:
             %    - fx; function handle @(t), takes seconds past t0 and returns 
-            %          s/c state in J2000
+            %       s/c state in J2000
             %    - C; model coefficients
             arguments
                 obj     (1,1)   OrbitPropagator
+                traj    (1,1)   Trajectory
+                t0      (1,1)   double
                 type    (1,:)   {mustBeText}
-                dt      (1,1)   double {mustBePositive}
                 N       (1,1)   {mustBeNonnegative,mustBeInteger}
             end
             
-            x_init = obj.x0;
+            x_init = traj.x0;
 
             % use chebichev nodes for interpolation
             span = chebichev(N);
+            dt = traj.ts(end) - traj.t0;
             t_interp = (span + 1) * dt / 2;
 
             % Parse different model types
@@ -476,8 +436,8 @@ classdef OrbitPropagator < Propagator
             end
 
             if N ~= 0
-                % propagate state at interpolation points
-                [~,x] = obj.runat(t_interp, 'J2000');
+                % get state at interpolation points
+                x = traj.get(t_interp + t0, 'J2000');
                 dx = x - x_base;
     
                 % compute coefficients for basis and generate model function
@@ -493,30 +453,6 @@ classdef OrbitPropagator < Propagator
                             + f_base(tau);
             else
                 fx = @(tau) f_base(tau);
-            end
-        end
-
-        function handles = statetotrajectory(obj)
-            %STATETOTRAJECTORY Converts the last propagation to a
-            %spline-interpolated trajectory handle.
-            arguments
-                obj     (1,1)   OrbitPropagator
-            end
-
-            data = obj.xs;
-
-            % catch a lack of run happening
-            if isempty(obj.frame)
-                error("plotlastorbits:noData", ...
-                    "No data has been generated yet!");
-            end
-
-            % convert trajectory into splines
-            handles = cell(obj.nsats, 1);
-            for k=1:obj.nsats
-                pp = spline(obj.ts, data(:,:,k));
-                handles{k} = @(tau,frame) cspice_sxform(obj.frame,frame,tau) ...
-                             * ppval(pp, tau);
             end
         end
 
@@ -548,7 +484,7 @@ classdef OrbitPropagator < Propagator
         end
     end
 
-    methods (Access = private)
+    methods
         function f = fast_harmonics(obj,x)
             %FAST_HARMONICS compute gravitational acceleration from spherical
             %harmonics of body
@@ -618,15 +554,14 @@ classdef OrbitPropagator < Propagator
             W(or(isinf(W), isnan(W))) = 0;
         end
 
-        function x = keplertool(obj,ts,x0)
+        function x = keplertool(obj,traj)
             %KEPLERTOOL Wrapper for Kepler_universal to handle multiple
             %time requests.
             %   Input:
             %    - ts; states to propagate to by solving Kepler's problem
             arguments
-                obj (1,1)   OrbitPropagator
-                ts  (1,:)   double
-                x0  (6,:)   double
+                obj  (1,1)  OrbitPropagator
+                traj (1,1)  Trajectory
             end
 
             x = zeros(6,length(ts));

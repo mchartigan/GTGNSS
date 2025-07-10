@@ -3,11 +3,7 @@ classdef (Abstract) Propagator < handle
     %This applies most to orbital propagators and clock propagators.
     
     properties (Abstract)
-        t0                          % starting time of propagation
-        x0                          % starting state of propagation
-        ts                          % times of resultant propagation
-        xs                          % states of resultant propagation
-        dim                         % dimension of state
+        dim (1,1)   {mustBeInteger,mustBePositive}  % dimension of state
     end
 
     methods
@@ -37,25 +33,11 @@ classdef (Abstract) Propagator < handle
             % square matrix to column vector
             dP = reshape(dP, obj.dim*obj.dim, 1);   
         end
-
-        function handle = statetotrajectory(obj)
-            %STATETOTRAJECTORY Converts the last propagation to a
-            %spline-interpolated trajectory handle.
-            arguments
-                obj (1,1)   Propagator
-            end
-
-            data = obj.xs;
-
-            % convert trajectory into splines
-            pp = spline(obj.ts, data);
-            handle = @(tau) ppval(pp, tau);
-        end
     end
     
     methods (Abstract)
-        out = run(obj,tf,n)         % run to final time w/ equispaced steps
-        out = runat(obj,ts)         % run to specific times
+        out = run(obj,ts,x0,n)      % run to final time w/ equispaced steps
+        out = runat(obj,ts,x0)      % run to specific times
         out = modelfit(obj)         % fit an approximation model to the result
         dxdt = dynamics(obj,t,x)    % partial differential equations governing dynamics
         A = partials(obj,t,x)       % jacobian of dynamics

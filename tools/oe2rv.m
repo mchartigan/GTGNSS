@@ -24,5 +24,10 @@ R_P2ECI = [cos(-RAAN) sin(-RAAN) 0; -sin(-RAAN) cos(-RAAN) 0; 0 0 1] * ...
 
 r_ = R_P2ECI * r_p;
 v_ = R_P2ECI * v_p;
+
+% accomodate outputting as a single state vector
+if nargout == 1
+    r_ = [r_; v_];
+end
 end
 

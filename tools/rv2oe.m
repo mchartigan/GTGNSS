@@ -6,6 +6,13 @@ function [a, e, i, RAAN, w, f] = rv2oe(r_, v_, mu)
 %  - v_; velocity (3x1), [km/s]
 %  - mu; gravitational parameter of body being orbited, [km^3 / s^2]
 
+% if only 2 args get passed in, then it's (x, mu) and reassign things
+if nargin == 2
+    mu = v_;
+    v_ = r_(4:6);
+    r_ = r_(1:3);
+end
+
 % a_ is a vector, a is a magnitude
 r_ = reshape(r_, 3, 1); v_ = reshape(v_, 3, 1); % ensure proper notation
 r = norm(r_);

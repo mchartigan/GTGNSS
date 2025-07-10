@@ -4,33 +4,26 @@ classdef User < handle
     
     properties
         % user trajectory 
-        traj    (1,1)   function_handle = @(varargin) disp([])
-        xs      (:,:)   double
-        ts      (1,:)   double
-        % reference frame for user trajectory
-        frame   (1,:)   {mustBeText} = 'J2000'
+        motion  (1,1)   Trajectory
+        clock   (1,1)   Trajectory
         % receiver
-        rec     (1,1)   Receiver = Receiver(Clock(0,zeros(3,1),"none"),"none")
+        rec     (1,1)   Receiver
         % receiver antenna
         ant     (1,1)   ReceiveAntenna
     end
     
     methods
-        function obj = User(fx,frame,rec,ant)
+        function obj = User(motion,clock,rec,ant)
             %USER Construct a User instance.
             %   Input:
-            %    - fx; function handle for user trajectory @(t) in seconds
-            %          past J2000, returns [pos (km); vel (km/s)] in frame
-            %    - frame; reference frame of fx
+            %    - motion; user motion Trajectory instance
+            %    - clock; clock offset Trajectory instance (same times as
+            %       motion)
             %    - rec; Receiver object instance
             %    - ant; ReceiveAntenna object instance
-            
-            if (nargin(fx) ~= 1 && nargin(fx) ~= -1) || (nargout(fx) ~= 1 && nargout (fx) ~= -1)
-                error("User:invalidInput", "fx must take (t) as an input and output (x)");
-            end
 
-            obj.traj = fx;
-            obj.frame = frame;
+            obj.motion = motion;
+            obj.clock = clock;
             obj.rec = rec;
             obj.ant = ant;
         end
@@ -41,15 +34,10 @@ classdef User < handle
             %    - ts; time steps, seconds past J2000
             %    - frame; reference frame to provide data in
             
-            x = obj.traj(ts);
-            if ~strcmp(frame,obj.frame)
-                for i=1:length(ts)
-                    x(1:6,i) = cspice_sxform(obj.frame,frame,ts(i)) * x(1:6,i);
-                end
-            end
-
-            obj.xs = x;
-            obj.ts = ts;
+            x = zeros(obj.motion.dim + obj.clock.dim, length(ts));
+            % Populate state data based on motion and clock trajectories
+            x(1:obj.motion.dim,:) = obj.motion.get(ts, frame);
+            x(obj.motion.dim+1:end,:) = obj.clock.get(ts);
         end
     end
 end

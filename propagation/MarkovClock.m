@@ -4,14 +4,10 @@ classdef MarkovClock < Propagator
     %   NOTE: Everything is normalized (multiplied) by c by default
     
     properties
-        % starting time of simulation, seconds past J2000
-        t0
-        % starting state of simulation
-        x0
         % size of state
         dim
         % no. of Markov processes
-        m           (1,1)   {mustBePositive,mustBeInteger} = 1
+        m           (1,1)   {mustBeNonnegative,mustBeInteger} = 1
         % propagation seed so noise is consistent between runs
         seed        (1,1)   {mustBeInteger} = 0
         % info stored from latest run (if ts = [], no run yet)
@@ -54,14 +50,13 @@ classdef MarkovClock < Propagator
     end
     
     methods
-        function obj = MarkovClock(t0,name,minout)
+        function obj = MarkovClock(name,minout)
             %MARKOVCLOCK Construct an instance of MarkovClock
             %   Inputs:
             %    - t0; starting time in seconds past J2000
             %    - name; filename (no extension) of clock info .json
             %         available on path
-            %    - minout; output struct from MarkovOpt that dictates the
-            %         stability
+            %    - minout;  
 
             % NOTE: Uncertainties (standard deviations) and states are
             % normalized by c throughout.
@@ -81,8 +76,6 @@ classdef MarkovClock < Propagator
                 obj.R(i)       = minout.x(3+fit_a+i);
             end
 
-            % set starting time
-            obj.t0 = t0;
             % set state size
             obj.dim = 3 + obj.m;
             % set static seed
@@ -90,34 +83,31 @@ classdef MarkovClock < Propagator
             % get info from datasheet .json
             obj.assignclockdata(name);
             obj.a = obj.a * obj.c;
-            obj.x0 = zeros(obj.dim,1);
-            obj.x0(3) = obj.a;
         end
 
-        function [ts,xs] = run(obj,x0,tf,n)
+        function [ts,xs] = run(obj,ts,x0,n)
             %RUN Propagate the input states for tf seconds (n steps
             %between).
             %   Input:
-            %    - x0; starting clock state (phase offset, frequency offset,
-            %         frequency drift)
-            %    - tf; final time, seconds past t0
+            %    - ts; [intial time, final time], seconds past J2000
+            %    - x0 (3,1) double; starting state
             %    - n; number of time steps
             %   Output:
             %    - ts; times in seconds past J2000
             %    - xs; clock states at ts
             arguments
                 obj (1,1)   MarkovClock
+                ts  (1,1)   double {mustBePositive}
                 x0  (3,1)   double
-                tf  (1,1)   double {mustBePositive}
                 n   (1,1)   {mustBeInteger,mustBePositive}
             end
 
             % initialize variables
-            ts = linspace(0,tf,n);
-            [ts,xs] = obj.runat(x0,ts);
+            ts = linspace(ts(1),ts(end),n);
+            xs = obj.runat(ts,x0);
         end
         
-        function [ts,xs] = runat(obj,x0,ts)
+        function [ts,xs] = runat(obj,ts,x0)
             %RUNAT Propagate the input states over the provided time steps.
             %   Input:
             %    - x0; starting clock state (phase offset, frequency offset,
@@ -128,8 +118,8 @@ classdef MarkovClock < Propagator
             %    - xs; clock states at ts
             arguments
                 obj (1,1)   MarkovClock
-                x0  (3,1)   double
                 ts  (1,:)   double {mustBeNonnegative}
+                x0  (3,1)   double
             end
             
             % rng(obj.seed)       % initialize rng for consistency
@@ -143,8 +133,6 @@ classdef MarkovClock < Propagator
             for i=1:obj.m
                 xs(3+i,1) = mvnrnd(0, obj.sigma_m(i)^2/(2*obj.R(i)));
             end
-            % assign starting state for obj.modelfit()
-            obj.x0 = xs(:,1);
 
             for i=2:n
                 dt = ts(i) - ts(i-1);
@@ -155,9 +143,6 @@ classdef MarkovClock < Propagator
 
                 xs(:,i) = phi * xs(:,i-1) + J;
             end
-
-            obj.ts = ts + obj.t0;
-            obj.xs = xs;
         end
 
         function phi = stm(obj,tau)

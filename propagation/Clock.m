@@ -8,98 +8,99 @@ classdef Clock < Propagator
     %   https://www.doi.org/10.1109/TUFFC.2005.1406554
     
     properties
-        t0                              % sim start time, seconds past J2000
-        x0                              % sim start state
-        Q       (3,3)   double          % process noise of clock
-        dim             = 3             % dimension of state
-        % info stored from latest run (if ts = [], no run yet)
-        ts
-        xs
+        Q       (:,:)   double              % process noise of clock
         % simulation seed, generated on initialization and reused on runat() for
         % consistency across runs
         seed    (1,1)   {mustBeInteger} = 0;
-        % should debug output be used?
-        DEBUG   (1,1)   {mustBeNonnegative,mustBeInteger} = 0
-        norm    (1,1)   double = 1
-        
-    end
-    properties (SetAccess = private)
-        % fundamental oscillator-specific info
-        type    (1,:)   {mustBeText} = "Allan"          % fit type
-        R2      (1,1)   double                          % R-squared value
-        f       (1,1)   double {mustBePositive} = 1     % oscillator frequency, Hz
-        a       (1,1)   double = 0                      % aging rate, s/s/s
-        t_allan (:,1)   double {mustBePositive} = []    % Allan deviation intervals, s
-        s_allan (:,1)   double {mustBePositive} = []    % Allan deviations, s/s
-        f_noise (1,:)   double {mustBePositive} = []    % phase noise frequency offsets, Hz
-        n_noise (1,:)   double = []                     % phase noise, dBc/Hz
+        DEBUG   (1,1)   {mustBeNumericOrLogical} = false        % should debug output be used?
+        norm    (1,1)   double = 1                              % normalization coefficient
+        markov  (1,1)   {mustBeNumericOrLogical} = false        % are markov processes included?
+        dim     = 3                                             % dimension of state
+        m       (1,1)   {mustBeInteger,mustBeNonnegative} = 0   % number of markov processes
+
+        % FIT UNCERTAINTY PARAMETERS %
+        % white frequency noise
+        sigma_w     (1,1)   double {mustBeNonnegative} = 0
+        % random walk frequency noise
+        sigma_rw    (1,1)   double {mustBeNonnegative} = 0
+        % random run frequency noise
+        sigma_rr    (1,1)   double {mustBeNonnegative} = 0
+        % frequency drift (aging rate) uncertainty
+        sigma_a     (1,1)   double {mustBeNonnegative} = 0
+        % Markov process noise
+        sigma_m     (:,1)   double {mustBeNonnegative} = 0
+        % Markov process time constants
+        R           (:,1)   double {mustBePositive} = 1
+
+        % CLOCK INFO FROM JSON %
+        % Hz, oscillator frequency
+        f           (1,1)   double {mustBePositive} = 1
+        % s/s/s, aging rate
+        a           (1,1)   double = 0
+        % s, stability intervals
+        t_stab      (:,1)   double {mustBePositive} = []
+        % s/s, stability (standard deviations)
+        s_stab      (:,1)   double {mustBePositive} = []
+        % s/s, stability (standard deviations) from Hadamard deviations
+        s_had       (:,1)   double {mustBePositive} = []
+        % Hz, phase noise frequency offsets
+        f_noise     (:,1)   double {mustBePositive} = []
+        % dBc/Hz, phase noise
+        n_noise     (:,1)   double = []
     end
     properties (Constant)
-        c = 299792458;                  % m/s, speed of light
+        c   = 299792458;    % m/s, speed of light
     end
     
     methods
-        function obj = Clock(t0,x0,name,varargin)
+        function obj = Clock(name,minout,options)
             %CLOCK Construct an oscillator/clock instance.
             %   Inputs:
-            %    - t0; starting time in seconds past J2000
-            %    - x0; starting state, [bias (s); drift (s/s); aging (1/s)]
-            %    - name; string, see Clock.assignclockdata() for options
+            %    - name; filename (no extension) of clock info .json
+            %         available on path
+            %    - minout; output struct from ClockOpt that dictates the
+            %       stability
             %    - debug; optional name-value pair (default false), print debug
             %       output
-            %    - fit; optional name-value pair (default "Allan"), model fit 
-            %       for short-term stability data
-            %    - normalize; optional name-value pair (default "false"),
-            %       multiply state by the speed of light to improve estimation
+            %    - normalize; optional name-value pair (default false),
+            %       multiply state by the speed of light to improve
+            %       numerical accuracy
             arguments
-                t0      (1,1)   double
-                x0      (3,1)   double
-                name    (1,:)   {mustBeText}
-            end
-            arguments (Repeating)
-                varargin
+                name                (1,:)   {mustBeText}
+                minout              (1,1)   struct
+                options.debug       (1,1)   {mustBeNumericOrLogical} = false
+                options.normalize   (1,1)   {mustBeNumericOrLogical} = false
             end
             
-            obj.t0 = t0;
-            obj.x0 = x0;
-            obj.DEBUG = false;
-            obj.type = "Allan";
+            % ASSIGN FROM INPUT OPTIONS %
+            obj.assignclockdata(name);
+            obj.DEBUG = options.debug;
+            if options.normalize, obj.norm = obj.c; end
 
-            if nargin > 3
-                for i=1:2:nargin-3
-                    if strcmp(varargin{i}, "debug")
-                        obj.DEBUG = varargin{i+1};
-                    elseif strcmp(varargin{i}, "fit")
-                        obj.type = varargin{i+1};
-                    elseif strcmp(varargin{i}, "normalize")
-                        if varargin{i+1}, obj.norm = obj.c; end
-                    end
-                end
-            elseif nargin < 3
-                error("Clock:nargin", "Clock.Clock() accepts >= 3 args.");
-            end
-
-            % parse clock type
-            if ~isa(name, 'string')
-                error("Clock:invalidType", "Clock type must either be string.");
-            end
-
-            if strcmpi(name, "none")        % no clock (default initialization)
-                return
-            else                            % get from supported clocks
-                obj.assignclockdata(name);
+            % ASSIGN FIT VARIANCES %
+            obj.sigma_w  = minout.x(1) * obj.norm;
+            obj.sigma_rw = minout.x(2) * obj.norm;
+            obj.sigma_rr = minout.x(3) * obj.norm;
+            % Markov process info
+            obj.m = (length(minout.x) - 3)/2;
+            obj.dim = 3 + obj.m;
+            obj.sigma_m  = zeros(obj.m, 1);
+            obj.R        = ones(obj.m, 1);
+            for i=1:2:2*obj.m
+                obj.sigma_m(i) = minout.x(3+i) * obj.norm;
+                obj.R(i)       = minout.x(4+i);
             end
 
             obj.seed = randi([1 1e9]);
-            obj.Q = obj.Q .* obj.norm^2;    % normalize by c if requested
             obj.a = obj.a * obj.norm;
         end
 
-        function [ts,xs,vs] = run(obj,tf,n)
+        function [ts,xs] = run(obj,ts,x0,n)
             %RUN Propagate the input states for tf seconds (n steps
             %between).
             %   Input:
-            %    - tf; final time, seconds past t0
+            %    - ts; [intial time, final time], seconds past J2000
+            %    - x0 (3,1) double; starting state
             %    - n; number of time steps
             %   Output:
             %    - ts; times in seconds past J2000
@@ -107,16 +108,17 @@ classdef Clock < Propagator
             %    - vs; clock covariance at ts
             arguments
                 obj (1,1)   Clock
-                tf  (1,1)   double {mustBePositive}
+                ts  (1,1)   double {mustBePositive}
+                x0  (3,1)   double
                 n   (1,1)   {mustBeInteger,mustBePositive}
             end
 
             % initialize variables
-            ts = linspace(0,tf,n);
-            [ts,xs,vs] = obj.runat(ts);
+            ts = linspace(ts(1),ts(end),n);
+            xs = obj.runat(ts,x0);
         end
 
-        function [ts,xs,vs] = runat(obj,ts)
+        function xs = runat(obj,ts,x0)
             %RUNAT Propagate the input states over the provided time steps.
             %   Input:
             %    - ts; eval time steps, seconds past t0
@@ -127,29 +129,70 @@ classdef Clock < Propagator
             arguments
                 obj (1,1)   Clock
                 ts  (1,:)   double {mustBeNonnegative}
+                x0  (3,1)   double
             end
             
             rng(obj.seed)       % initialize rng for consistency
 
             % initialize variables
             n = length(ts);
-            xs = zeros(3,n);
-            xs(:,1) = obj.x0;
-            vs = zeros(3,3,n);
+            xs = zeros(obj.dim,n);
+            xs(1:3,1) = x0;
+            % set starting state of Markov processes as RV with mean 0 and
+            % variance U = sigma_m^2/(2*R)
+            for i=1:obj.m
+                xs(3+i,1) = mvnrnd(0, obj.sigma_m(i)^2/(2*obj.R(i)));
+            end
 
             for i=2:n
                 dt = ts(i) - ts(i-1);
-                stm = Clock.STM(dt);
+                stm = obj.STM(dt);
             
                 % innovation vector, J ~ N(0,Q)
-                J = mvnrnd([0 0 0], obj.dtcovariance(dt), 1)';
-                % covariance of x at ts(i)
-                vs(:,:,i) = obj.dtcovariance(ts(i)); 
+                J = mvnrnd(zeros(1,obj.dim), obj.processnoise(dt), 1)';
                 xs(:,i) = stm * xs(:,i-1) + J;
             end
+        end
 
-            obj.ts = ts + obj.t0;
-            obj.xs = xs;
+        function assignclockdata(obj,name)
+            %ASSIGNCLOCKDATA Sets a number of object properties based on
+            %the name of a given oscillator, accessing data from .json.
+            %   Input:
+            %    - name; string name of oscillator (must match filename exactly)
+            arguments
+                obj     (1,1)   Clock
+                name    (1,:)   {mustBeText}
+            end
+
+            % handle empty case
+            if strcmpi(name, "none")
+                obj.f = 1;
+                obj.a = 0;
+                obj.t_stab = 1;
+                obj.s_stab = 0;
+                obj.s_had  = 0;
+                obj.f_noise = 1;
+                obj.n_noise = -Inf;
+                return;
+            end
+
+            fname = name + ".json";
+
+            try
+                data = jsondecode(fileread(fname));
+            catch
+                error("assignclockdata:fileNotFound", ...
+                    "File %s could not be found.", fname);
+            end
+
+            % assign data from JSON file
+            obj.f = data.frequency;
+            obj.a = data.aging / 86400;     % convert s/s/day -> s/s/s
+            obj.t_stab  = data.stability.int;
+            obj.s_stab  = data.stability.dev;
+            obj.s_had   = data.stability.hadamard;
+            obj.f_noise = data.phase_noise.freq;
+            obj.n_noise = data.phase_noise.noise;
         end
 
         function P = proplyapunov(obj,ts,P0)
@@ -168,23 +211,20 @@ classdef Clock < Propagator
             P = zeros(obj.dim, obj.dim, n);
             
             % reshape starting P to correct format
-            P0 = reshape(P0, obj.dim*obj.dim, 1) * obj.c^4;
-            [~,Y] = ode45(@(t,p) obj.lyapunov(p, Clock.partials(t,obj.x0), obj.Q * obj.c^4), ...
-                          ts, P0, odeset("RelTol", 1e-9, "AbsTol", 1e-11));
+            P(:,:,1) = P0;
 
             % store covariance matrices in appropriate structure
-            for i=1:length(ts)
-                P(:,:,i) = reshape(Y(i,:)', obj.dim, obj.dim);
+            for i=2:length(ts)
+                Phi = obj.STM(ts(i)-ts(i-1));
+                Qi = obj.processnoise(ts(i)-ts(i-1));
+                P(:,:,i) = Phi*P(:,:,i-1)*Phi' + Qi;
             end
-
-            P = P ./ obj.c^4;
         end
 
         function s = stability(obj,dt)
             %STABILITY Returns the short-term stability of the oscillator
-            %at the given measurement interval. Either Allan or Hadamard
-            %variance(! not deviation), in (s/s)^2 or (m/s)^2, depending on
-            %normalization.
+            %at the given measurement interval. Hadamard variance(! not
+            %deviation), in (s/s)^2 or (m/s)^2, depending on normalization.
             %   Input:
             %    - dt; measurement interval in s
             arguments
@@ -192,152 +232,37 @@ classdef Clock < Propagator
                 dt  (1,:)   double {mustBePositive}
             end
 
-            if strcmpi(obj.type, "Allan")
-                s = obj.Q(1,1)./dt + obj.Q(2,2)*dt/3 + dt.^2/2 * obj.a^2;
-            elseif strcmpi(obj.type, "Hadamard")
-                s = obj.Q(1,1)./dt + obj.Q(2,2)*dt/6 + 11/120*obj.Q(3,3)*dt.^3;
-            elseif strcmpi(obj.type, "constant")
-                s = obj.s_allan^2;
-            else
-                error("stability:invalidFit", "Not sure how you got here really...");
-            end
+            s1 = obj.sigma_w;
+            s2 = obj.sigma_rw;
+            s3 = obj.sigma_rr;
+            s = s1^2./dt + s2^2*dt/6 + 11/120*s3^2*dt.^3;
         end
 
-        function Q = dtcovariance(obj,dt)
-            %DTCOVARIANCE Returns the discrete-time covariance associated
-            %w/ the Wiener processes (obj.Q) is the continuous-time
-            %coviarance.
+        function Q = processnoise(obj,dt)
+            %PROCESSNOISE Returns the discrete-time covariance associated
+            %w/ the Wiener processes.
             %   Input:
-            %    - dt; time step
-            arguments
-                obj (1,1)   Clock
-                dt  (1,1)   double {mustBePositive}
-            end
+            %    - tau; time step
 
-            v1 = obj.Q(1,1);
-            v2 = obj.Q(2,2);
-            v3 = obj.Q(3,3);
-
-            Q = [v1*dt + v2/3*dt^3 + v3/20*dt^5 v2/2*dt^2 + v3/8*dt^4 v3/6*dt^3;
-                 v2/2*dt^2 + v3/8*dt^4          v2*dt + v3/3*dt^3     v3/2*dt^2;
-                 v3/6*dt^3                      v3/2*dt^2             v3*dt   ];
-        end
-
-        function assignclockdata(obj,name)
-            %ASSIGNCLOCKDATA Sets a number of object properties based on
-            %the name of a given oscillator, accessing data from JSON.
-            %   Choose oscillator from list: "MicrochipCSAC", "MicrochipMAC",
-            %   "SafranMAC", "SafranMiniRAFS", "RakonMiniUSO", "AccubeatUSO",
-            %   "SafranRAFS", "ExcelitasRAFS"
-            %
-            %   Input:
-            %    - name; string name of oscillator (must match file exactly)
-            arguments
-                obj     (1,1)   Clock
-                name    (1,:)   {mustBeText}
-            end
-
-            fname = name + ".json";
-
-            try
-                data = jsondecode(fileread(fname));
-            catch
-                error("assignclockdata:fileNotFound", ...
-                    "File %s could not be found.", fname);
-            end
-
-            % assign data from JSON file
-            obj.f = data.frequency;
-            obj.a = data.aging / 86400;     % convert s/s/day -> s/s/s
-            obj.t_allan = data.stability.int';
-            obj.s_allan = data.stability.dev';
-            obj.f_noise = data.phase_noise.freq;
-            obj.n_noise = data.phase_noise.noise;
-
-            % organize variables for fitting process
-            taus = obj.t_allan;
-            stds = obj.s_allan;
-            nrm = stds(end)^2;
-
-            if strcmpi(obj.type, "Allan")
-                % organize coefficients to solve Allan variance equation
-                b = (stds.^2 - obj.a^2 / 2 * taus.^2) / nrm;
-                
-                % perform constrained linear least squares fit to Allan
-                % variance equation
-                opts = fitoptions('Method', 'LinearLeastSquares', ...
-                    'Lower', [0 0], 'Robust', 'off');
-                ftype = fittype({'1/x', 'x'}, 'options', opts);
-                [curve, gof] = fit(taus, b, ftype);
-                
-                % convert and assign coefficients
-                B = [coeffvalues(curve) * nrm obj.a^2/2]';
-                s1 = sqrt(B(1));                % diffusion coefficient of white noise
-                s2 = sqrt(3 * B(2));            % ^ of random walk frequency noise
-                s3 = 0;                         % set to zero (aging rate is constant)
-
-            elseif strcmpi(obj.type, "Hadamard")
-                % organize coefficients to solve Hadamard variance equation
-                b = stds.^2 / nrm;
-                
-                % perform constrained linear least squares fit to Hadamard
-                % variance equation
-                opts = fitoptions('Method', 'LinearLeastSquares', ...
-                    'Lower', [0 0 0], 'Robust', 'off');
-                ftype = fittype({'1/x', 'x', 'x^3'}, 'options', opts);
-                [curve, gof] = fit(taus, b, ftype);
-
-                % convert and assign coefficients
-                B = coeffvalues(curve)' * nrm;
-                s1 = sqrt(B(1));                % diffusion coefficient of white noise
-                s2 = sqrt(B(2) * 6);            % ^ of random walk frequency noise
-                s3 = sqrt(120 * B(3) / 11);     % set to zero (aging rate is constant)
-
-            elseif strcmpi(obj.type, "constant")
-                s1 = 0;
-                s2 = 0;
-                s3 = 0;
-                gof.sse = 0;
-
-            else
-                error("assignclockdata:invalidFit", ...
-                    "%s not found, valid fit options found in documentation.", obj.type);
-            end
-
-            obj.R2 = gof.rsquare;           % summary statistic of fit quality
-            obj.Q = diag([s1 s2 s3].^2);    % coefficients into process noise
-
-            if obj.DEBUG
-                % plot short-term stability fit to check quality
-                ta = obj.t_allan(1):obj.t_allan(end);
-
-                if strcmpi(name, "AccubeatUSO")
-                    data2 = jsondecode(fileread("AltAccubeatUSO.json"));
-                    t2 = data2.stability.int';
-                    s2 = data2.stability.dev';
-                    ta = t2(1):t2(end);
-                end
-                if strcmpi(obj.type, "Allan")
-                    sa = sqrt(B(1) ./ ta + B(2) .* ta + obj.a^2/2 * ta .^ 2);
-                else
-                    sa = sqrt(B(1) ./ ta + B(2) * ta + B(3) * ta .^ 3);
-                end
-
-                entries = ["Model", "Data"];
+            s1 = obj.sigma_w;
+            s2 = obj.sigma_rw;
+            s3 = obj.sigma_rr;
             
-                figure();
-                loglog(ta, sa);
-                hold on;
-                scatter(obj.t_allan, obj.s_allan, 100, "rx");
-                if strcmpi(name, "AccubeatUSO")
-                    scatter(t2, s2, 50, "k*");
-                    entries = ["Model", "Specified Data", "Sample Clock from Datasheet"];
-                end
-                hold off; grid on;
-                xlabel("Interval (s)");
-                ylabel("\sigma_Y(\tau)");
-                title(sprintf("%s %s deviation fit", name, obj.type));
-                legend(entries);
+            Q = zeros(obj.dim, obj.dim);
+            % traditional white + random walk model
+            Q(1:3,1:3) = ...
+                [s1^2*dt + s2^2/3*dt^3 + s3^2/20*dt^5, s2^2/2*dt^2 + s3^2/8*dt^4, s3^2/6*dt^3
+                           s2^2/2*dt^2 + s3^2/8 *dt^4, s2^2  *dt   + s3^2/3*dt^3, s3^2/2*dt^2
+                                         s3^2/6 *dt^3,               s3^2/2*dt^2, s3^2*dt    ];
+            % contributions from Markov processes
+            for i=1:obj.m
+                Q(1,1) = Q(1,1) + obj.sigma_m(i)^2 * ...
+                    (-3/2 + obj.R(i)*dt + 2*exp(-obj.R(i)*dt) - exp(-2*obj.R(i)*dt)/2) / obj.R(i)^3;
+                Q(1,3+i) = obj.sigma_m(i)^2 * ...
+                    (1/2 - exp(-obj.R(i)*dt) + exp(-2*obj.R(i)*dt)/2) / obj.R(i)^2;
+                Q(3+i,1) = Q(1,3+i);
+                Q(3+i,3+i) = obj.sigma_m(i)^2 * ...
+                    (1 - exp(-2*obj.R(i)*dt)) / (2*obj.R(i));
             end
         end
 
@@ -374,47 +299,84 @@ classdef Clock < Propagator
             err = mvnrnd(0, var);
         end
 
-        function [fx,C] = modelfit(obj)
-            %MODELFIT Returns a second-order polynomial model for the clock
-            %state over time. Starting epoch is the current t0, x0
-            %   Output:
-            %    - fx; @(t) function handle, input seconds past J2000 and
-            %          it returns clock state
-            %    - C; current bias, drift, aging used
-            arguments
-                obj (1,1)   Clock
-            end
-
-            C = obj.x0;
-            fx = @(tau) [C(1) + (tau)*C(2) + (tau).^2/2*C(3); ...
-                       C(2) + (tau)*C(3); ...
-                       ones(size(tau))*C(3)];
-        end
-    end
-
-    methods (Static)
-        function stm = STM(dt)
+        function stm = STM(obj,dt)
             %STM Returns the DT state transition matrix based on the dynamics
             %defined in Zucca and Tavella.
             %   Input:
             %    - dt; time step
-            arguments
-                dt  (1,1)   double {mustBePositive}
-            end
 
             stm = [1 dt dt^2/2; 0 1 dt; 0 0 1];
+            % contribution from Markov processes
+            for i=1:obj.m
+                stm(1,3+i) = (1 - exp(-obj.R(i)*dt))/obj.R(i);
+                stm(3+i,3+i) = exp(-obj.R(i)*dt);
+            end
         end
 
+        function plot(obj,traj)
+            %PLOT Plots the phase, freq. offset, and freq. drift for the
+            %provided trajectory.
+            %   Input:
+            %    - traj; Trajectory object for Clock output
+            arguments
+                obj     (1,1)   Clock
+                traj    (1,1)   Trajectory
+            end
+
+            ts = traj.ts;
+            xs = traj.xs;
+
+            if obj.norm == 1
+                units = "ns";
+                xs = xs * 1e9;
+            else
+                units = "m";
+            end
+
+            dt = ts - ts(1);
+
+            if dt(end) > 86400
+                time = "days";
+                tplot = dt / 86400;
+            elseif dt(end) > 3600
+                time = "hrs";
+                tplot = dt / 3600;
+            else
+                time = "s";
+            end
+
+            
+            figure();
+            plotformat("APA", 0.9);
+            tiledlayout(3,1);
+            
+            nexttile;
+            plot(tplot, xs(1,:));
+            grid on;
+            ylabel(sprintf("Phase offset (%s)", units));
+            
+            nexttile;
+            plot(tplot, xs(2,:));
+            grid on;
+            ylabel(sprintf("Freq. offset (%s/s)", units));
+            
+            nexttile;
+            plot(tplot, xs(3,:));
+            grid on;
+            ylabel(sprintf("Freq. drift (%s/s^2)", units));
+            xlabel(sprintf("Time (%s)", time));
+
+            sgtitle("Clock trajectory");
+        end
+    end
+
+    methods (Static)
         function dxdt = dynamics(~,x)
             %DYNAMICS Invokes the clock dynamics based on the Zucca and
             %Tavella paper.
             %   Input:
             %    - t; simulation time, not used
             %    - x; current clock state
-            arguments
-                ~
-                x   (3,1)   double
-            end
 
             dxdt = [0 1 0; 0 0 1; 0 0 0] * x;
         end
@@ -426,6 +388,27 @@ classdef Clock < Propagator
             %    - x; current clock state, also not used lol
 
             A = [0 1 0; 0 0 1; 0 0 0];
+        end
+
+        function [fx,C] = modelfit(traj,t0)
+            %MODELFIT Returns a second-order polynomial model for the clock
+            %state over time. Starting epoch is the current t0, x0
+            %   Input:
+            %    - traj; Trajectory object of clock states
+            %    - t0; starting epoch (s past J2000)
+            %   Output:
+            %    - fx; @(t) function handle, input seconds past J2000 and
+            %          it returns clock state
+            %    - C; current bias, drift, aging used
+            arguments
+                traj    (1,1)   Trajectory
+                t0      (1,1)   double
+            end
+
+            C = traj.get(t0);
+            fx = @(tau) [C(1) + (tau)*C(2) + (tau).^2/2*C(3); ...
+                       C(2) + (tau)*C(3); ...
+                       ones(size(tau))*C(3)];
         end
     end
 end
