@@ -78,12 +78,12 @@ classdef Clock < Propagator
             if options.normalize, obj.norm = obj.c; end
 
             % ASSIGN FIT VARIANCES %
-            obj.sigma_w  = minout.x(1) * obj.norm;
-            obj.sigma_rw = minout.x(2) * obj.norm;
-            obj.sigma_rr = minout.x(3) * obj.norm;
+            obj.sigma_w  = minout.x(2) * obj.norm;
+            obj.sigma_rw = minout.x(3) * obj.norm;
+            obj.sigma_rr = minout.x(5) * obj.norm;
             % Markov process info
-            obj.m = (length(minout.x) - 3)/2;
-            obj.dim = 3 + obj.m;
+            obj.m = (length(minout.x) - 5)/2;
+            obj.dim = 5 + obj.m;
             obj.sigma_m  = zeros(obj.m, 1);
             obj.R        = ones(obj.m, 1);
             for i=1:2:2*obj.m
