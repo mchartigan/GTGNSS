@@ -19,8 +19,10 @@ classdef Clock < Propagator
         m       (1,1)   {mustBeInteger,mustBeNonnegative} = 0   % number of markov processes
 
         % FIT UNCERTAINTY PARAMETERS %
+        % white phase noise
+        sigma_wp    (1,1)   double {mustBeNonnegative} = 0
         % white frequency noise
-        sigma_w     (1,1)   double {mustBeNonnegative} = 0
+        sigma_wf    (1,1)   double {mustBeNonnegative} = 0
         % random walk frequency noise
         sigma_rw    (1,1)   double {mustBeNonnegative} = 0
         % random run frequency noise
@@ -40,9 +42,9 @@ classdef Clock < Propagator
         % s, stability intervals
         t_stab      (:,1)   double {mustBePositive} = []
         % s/s, stability (standard deviations)
-        s_stab      (:,1)   double {mustBePositive} = []
+        s_stab      (:,1)   double {mustBeNonnegative} = []
         % s/s, stability (standard deviations) from Hadamard deviations
-        s_had       (:,1)   double {mustBePositive} = []
+        s_had       (:,1)   double {mustBeNonnegative} = []
         % Hz, phase noise frequency offsets
         f_noise     (:,1)   double {mustBePositive} = []
         % dBc/Hz, phase noise
@@ -53,13 +55,15 @@ classdef Clock < Propagator
     end
     
     methods
-        function obj = Clock(name,minout,options)
+        function obj = Clock(name,x,options)
             %CLOCK Construct an oscillator/clock instance.
             %   Inputs:
             %    - name; filename (no extension) of clock info .json
             %         available on path
-            %    - minout; output struct from ClockOpt that dictates the
-            %       stability
+            %    - minout; output from ClockOpt that dictates the
+            %       stability, in form
+            %          [sigma_WP sigma_WF sigma_RW sigma_RR sigma_m1 R1 ... sigma_mn Rn]'
+            %       all entries after sigma_RR are optional. units in s 
             %    - debug; optional name-value pair (default false), print debug
             %       output
             %    - normalize; optional name-value pair (default false),
@@ -67,7 +71,7 @@ classdef Clock < Propagator
             %       numerical accuracy
             arguments
                 name                (1,:)   {mustBeText}
-                minout              (1,1)   struct
+                x                   (:,1)   double {mustBeNonnegative}
                 options.debug       (1,1)   {mustBeNumericOrLogical} = false
                 options.normalize   (1,1)   {mustBeNumericOrLogical} = false
             end
@@ -78,17 +82,18 @@ classdef Clock < Propagator
             if options.normalize, obj.norm = obj.c; end
 
             % ASSIGN FIT VARIANCES %
-            obj.sigma_w  = minout.x(2) * obj.norm;
-            obj.sigma_rw = minout.x(3) * obj.norm;
-            obj.sigma_rr = minout.x(5) * obj.norm;
+            obj.sigma_wp = x(1) * obj.norm;
+            obj.sigma_wf = x(2) * obj.norm;
+            obj.sigma_rw = x(3) * obj.norm;
+            obj.sigma_rr = x(4) * obj.norm;
             % Markov process info
-            obj.m = (length(minout.x) - 5)/2;
-            obj.dim = 5 + obj.m;
+            obj.m = (length(x) - 4)/2;
+            obj.dim = 3 + obj.m*2;
             obj.sigma_m  = zeros(obj.m, 1);
             obj.R        = ones(obj.m, 1);
             for i=1:2:2*obj.m
-                obj.sigma_m(i) = minout.x(3+i) * obj.norm;
-                obj.R(i)       = minout.x(4+i);
+                obj.sigma_m(i) = x(4+i) * obj.norm;
+                obj.R(i)       = x(5+i);
             end
 
             obj.seed = randi([1 1e9]);
@@ -232,10 +237,27 @@ classdef Clock < Propagator
                 dt  (1,:)   double {mustBePositive}
             end
 
-            s1 = obj.sigma_w;
+            s1 = obj.sigma_wf;
             s2 = obj.sigma_rw;
             s3 = obj.sigma_rr;
-            s = s1^2./dt + s2^2*dt/6 + 11/120*s3^2*dt.^3;
+
+            % contribution of white frequency modulation
+            part_WFM  = s1^2 ./ dt;
+            % ... random walk frequency modulation
+            part_RWFM = s2^2/6 * dt;
+            % ... random run frequency modulation
+            part_RRFM = 11/120*s3^2 * dt.^3;
+            % ... stationary Markov (Wiener) processes
+            part_M = zeros(size(part_WFM));
+            for i=1:obj.m
+                sm = obj.sigma_m(i);
+                Ri = obj.R(i);
+                part_M = part_M + ...
+                    sm^2*(-10 + 6*Ri*dt + 15*exp(-Ri*dt) - 6*exp(-2*Ri*dt) + exp(-3*Ri*dt)) ./ ...
+                    (6*Ri^3*dt.^2);
+            end
+
+            s = part_WFM + part_RWFM + part_RRFM + part_M;
         end
 
         function Q = processnoise(obj,dt)
@@ -244,7 +266,7 @@ classdef Clock < Propagator
             %   Input:
             %    - tau; time step
 
-            s1 = obj.sigma_w;
+            s1 = obj.sigma_wf;
             s2 = obj.sigma_rw;
             s3 = obj.sigma_rr;
             
@@ -305,7 +327,8 @@ classdef Clock < Propagator
             %   Input:
             %    - dt; time step
 
-            stm = [1 dt dt^2/2; 0 1 dt; 0 0 1];
+            stm = zeros(obj.dim,obj.dim);
+            stm(1:3,1:3) = [1 dt dt^2/2; 0 1 dt; 0 0 1];
             % contribution from Markov processes
             for i=1:obj.m
                 stm(1,3+i) = (1 - exp(-obj.R(i)*dt))/obj.R(i);

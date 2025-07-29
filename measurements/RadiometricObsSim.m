@@ -1,4 +1,4 @@
-classdef RadiometricObsSim < handle
+ classdef RadiometricObsSim < handle
     %RADIOMETRICOBSSIM Main class for simulating GNSS-like radiometric
     %measurements (GPS, Galileo, LCRNS, etc.).
     %   This class interfaces with NavSatellite and Receiver to create
@@ -104,6 +104,19 @@ classdef RadiometricObsSim < handle
             %    - msg (:,:) double; navigation message data, in array. See
             %       NavSatellite.generatenavmsg() for format.
 
+            % find line
+            for line=size(msg,1):-1:1
+                if msg(line,2) == ID && msg(line,1) <= t
+                    msg = msg(line,:);
+                    break;
+                end
+                if line == 1
+                    error("geteph:invalidMSG", ...
+                        "Applicable message could not be found for t=%.0f, ID=%d", ...
+                        t, ID);
+                end
+            end
+
             tau = t - msg(10);                  % time since ephemeris epoch
             RAAN = msg(14) + msg(18)*tau;       % rad, right ascension
             i  = msg(13) + msg(17)*tau;         % rad, inclination
@@ -135,7 +148,12 @@ classdef RadiometricObsSim < handle
             ykdot =  xp*RAANdot*cos(RAAN) + xpdot*sin(RAAN) + ypdot*cos(RAAN)*cos(i) - yp*(RAANdot*sin(RAAN)*cos(i) + idot*cos(RAAN)*sin(i));
             zkdot = ypdot*sin(i) + yp*idot*cos(i);
         
-            x = [xk yk zk xkdot ykdot zkdot]';
+            % compute clock offsets
+            tau = t - msg(5);
+            xc = msg(6) + msg(7)*tau + msg(8)*tau^2;
+            yc = msg(7) + 2*msg(8)*tau;
+            zc = 2*msg(8);
+            x = [xk yk zk xkdot ykdot zkdot xc yc zc]';
         end
     end
 end

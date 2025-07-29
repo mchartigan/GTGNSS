@@ -4,7 +4,7 @@ classdef SatellitePropagator < Propagator
 
     properties
         orbit   (1,1)   OrbitPropagator = OrbitPropagator(1)
-        clock   (1,1)   Clock = Clock("none")
+        clock   (1,1)   Clock = Clock("none", zeros(4,1))
         dim     = 9         % dimension of state
     end
 

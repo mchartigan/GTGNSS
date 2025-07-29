@@ -6,7 +6,7 @@ classdef Receiver < handle
         % antenna object
         ant     (1,1)   ReceiveAntenna
         % receiver clock, units in m %
-        clock       (1,1)   Clock = Clock("none")
+        clock       (1,1)   Clock = Clock("none", zeros(4,1))
 
         % signal characteristics %
         % Hz, receiving center frequency (default 2492.028 MHz, LunaNet AFS)
@@ -132,8 +132,8 @@ classdef Receiver < handle
             y(2,end) = y(2,end) - phi0;
 
             % initialize variances and error
-            err = zeros(3,n);
-            track = true(3,n);
+            err = nan(3,n);
+            track = false(3,n);
             var.thermal = zeros(3,n);
             var.clk = zeros(3,n);
             var.dyn = zeros(3,n);
@@ -216,7 +216,7 @@ classdef Receiver < handle
 
                 % add oscillator phase noise, rad^2
                 var.clk(2,:) = (2*pi/coef/obj.Bn_c * obj.freq)^2 * ...
-                           obj.clock.stability(1/obj.Bn_c) * ones(size(var.thermal));
+                           obj.clock.stability(1/obj.Bn_c) * ones(1,size(var.thermal,2));
                 % add dynamic stress error
                 var.dyn(2,:) = (abs(dyn) / (3*w0^obj.carrierorder)).^2;
                 var.total(2,:) = var.thermal(2,:) + var.clk(2,:) + var.dyn(2,:);
@@ -271,7 +271,8 @@ classdef Receiver < handle
 
             % generate noise based on var
             for i=1:n
-                err(:,i) = mvnrnd(zeros(1,3), diag(var.total(:,i)))';
+                ind = ~isnan(var.total(:,i));
+                err(ind,i) = mvnrnd(zeros(1,sum(ind)), diag(var.total(ind,i)))';
             end
             % apply noise to measurements
             y = y + err;

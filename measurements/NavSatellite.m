@@ -201,10 +201,10 @@ classdef NavSatellite < handle
             n = length(ts);     % no. of measurements
             % get reference trajectory of satellite and clock
             xref = zeros(9,n);
-            xref(1:6,:) = obj.traj(1).get(tt, 'J2000');
+            xref(1:6,:) = obj.traj(1).get(tt, 'MOON_ME');
             xref(7:9,:) = obj.traj(2).get(tt);
             % get reference trajectory of user
-            xuser = user.getstates(ts, 'J2000');
+            xuser = user.getstates(ts, 'MOON_ME');
             
             % create line-of-sight direction
             los = xref(1:3,:,1) - xuser(1:3,:,1);
@@ -212,11 +212,25 @@ classdef NavSatellite < handle
 
             % generate nav update times
             tmsg = [tt(1)-1:obj.cadence:tt(end) tt(end)];
-            [xmsg, Pmsg] = obj.getnavstates(tmsg);
+            [xmsg, Pmsg] = obj.getnavstates(tmsg, 'MOON_ME');
             msg = zeros(length(tmsg)-1, 19);
             Pnav = zeros(9,9,n);        % store starting uncertainty
             xprop = zeros(9,n);         % store the propagated states
             Pprop = zeros(9,9,n);
+            xmdl = zeros(9,n);
+
+            % compute errors and variances
+            Pprop = Pprop - Pnav;           % separate errors from initial est. and propagation
+            err.eph_prop = zeros(2,n);      % error due to initial OD and propagation
+            err.eph_mdl  = zeros(2,n);      % error due to ephemeris parameterization
+            err.clk_prop = zeros(2,n);      % error due to clock est. and propagation
+            err.clk_mdl  = zeros(2,n);      % error due to clock parameterization
+            var.eph_est  = zeros(2,n);      % variance of initial OD
+            var.eph_prop = zeros(2,n);      % variance of state propagation (-OD)
+            var.eph_mdl  = zeros(2,n);      % variance of ephemeris parameterization
+            var.clk_est  = zeros(2,n);      % variance of initial clock est.
+            var.clk_prop = zeros(2,n);      % variance of clock propagation (-est.)
+            var.clk_mdl  = zeros(2,n);      % variance of clock parameterization
 
             % iterate over update times
             for i=1:length(tmsg)-1
@@ -228,47 +242,54 @@ classdef NavSatellite < handle
                 % propagate states over given times. tmsg(i) provided so
                 % trajectory starts at appropriate time
                 tsub = [tmsg(i) tt(jj)];
-                xsub = obj.prop.runat(tsub, xmsg(:,i), 'J2000');
+                xsub = obj.prop.runat(tsub, xmsg(:,i), 'MOON_ME');
                 % cut out xmsg(:,i) since it may not align with tt
                 xprop(:,jj) = xsub(:,2:end);
                 Pprop(:,:,jj) = ...
                     obj.prop.proplyapunov(tt(jj), xmsg(:,i), Pmsg(:,:,i));
                 % provide these propagated states (plus initial one) as a
                 % Trajectory and create a navigation message about it.
-                subeph = Trajectory(tsub, xsub(1:6,:), 'J2000');
+                subeph = Trajectory(tsub, xsub(1:6,:), 'MOON_ME');
                 subclk = Trajectory(tsub, xsub(7:9,:));
                 msg(i,:) = obj.generatenavmsg([subeph; subclk]);
-            end
-            
-            % compute errors and variances
-            err_prop = xprop - xref;
-            Pprop = Pprop - Pnav;           % separate errors from initial est. and propagation
-            err.eph_prop = zeros(2,n);      % error due to initial OD and propagation
-            err.clk_prop = zeros(2,n);      % error due to clock est. and propagation
-            var.eph_est  = zeros(2,n);      % variance of initial OD
-            var.eph_prop = zeros(2,n);      % variance of state propagation (-OD)
-            var.clk_est  = zeros(2,n);      % variance of initial clock est.
-            var.clk_prop = zeros(2,n);      % variance of clock propagation (-est.)
-            % project onto line-of-sight direction
-            for i=1:n
-                % range and range-rate error (in s and s/s) due to propagation
-                err.eph_prop(1,i) = err_prop(1:3,i)' * los(:,i) / obj.c_km;
-                err.eph_prop(2,i) = err_prop(4:6,i)' * los(:,i) / obj.c_km;
-                % " due to onboard clock offset from proper time
-                err.clk_prop(:,i) = err_prop(7:8,i) / obj.c;
-                % variance from OD (in s^2 and s^2/s^2)
-                var.eph_est(1,i) = los(:,i)' * Pnav(1:3,1:3,i) * los(:,i) / obj.c_km2;
-                var.eph_est(2,i) = los(:,i)' * Pnav(4:6,4:6,i) * los(:,i) / obj.c_km2;
-                var.clk_est(:,i) = diag(Pnav(7:8,7:8,i)) / obj.c2; 
-                % " from state propagation
-                var.eph_prop(1,i) = los(:,i)' * Pprop(1:3,1:3,i) * los(:,i) / obj.c_km2;
-                var.eph_prop(2,i) = los(:,i)' * Pprop(4:6,4:6,i) * los(:,i) / obj.c_km2;
-                var.clk_prop(:,i) = diag(Pprop(7:8,7:8,i)) / obj.c2;
+
+                % compute model states and all errors/variances
+                for k=find(jj)
+                    xmdl(:,k) = RadiometricObsSim.geteph(tt(k), obj.ID, msg(i,:));
+
+                    % compute time step errors
+                    err_prop = xprop(:,k) - xref(:,k);
+                    err_mdl = xmdl(:,k) - xprop(:,k);
+
+                    % range and range-rate error (in s and s/s) due to propagation
+                    err.eph_prop(1,k) = err_prop(1:3)' * los(:,k) / obj.c_km;
+                    err.eph_prop(2,k) = err_prop(4:6)' * los(:,k) / obj.c_km;
+                    % " due to ephemeris model
+                    err.eph_mdl(1,k) = err_mdl(1:3)' * los(:,k) / obj.c_km;
+                    err.eph_mdl(2,k) = err_mdl(4:6)' * los(:,k) / obj.c_km;
+                    % " due to onboard clock offset from proper time
+                    err.clk_prop(:,k) = err_prop(7:8) / obj.c;
+                    % " due to clock model
+                    err.clk_mdl(:,k) = err_mdl(7:8) / obj.c;
+                    % variance from OD (in s^2 and s^2/s^2)
+                    var.eph_est(1,k) = los(:,k)' * Pnav(1:3,1:3,k) * los(:,k) / obj.c_km2;
+                    var.eph_est(2,k) = los(:,k)' * Pnav(4:6,4:6,k) * los(:,k) / obj.c_km2;
+                    var.clk_est(:,k) = diag(Pnav(7:8,7:8,k)) / obj.c2; 
+                    % " from state propagation
+                    var.eph_prop(1,k) = los(:,k)' * Pprop(1:3,1:3,k) * los(:,k) / obj.c_km2;
+                    var.eph_prop(2,k) = los(:,k)' * Pprop(4:6,4:6,k) * los(:,k) / obj.c_km2;
+                    var.clk_prop(:,k) = diag(Pprop(7:8,7:8,k)) / obj.c2;
+                end
+
+                % " from parameterization (computed in batch)
+                var.eph_mdl(:,jj) = repmat(std(err.eph_mdl(:,jj), 0, 2).^2, 1, length(jj));
+                var.clk_mdl(:,jj) = repmat(std(err.clk_mdl(:,jj), 0, 2).^2, 1, length(jj));
             end
 
             % total everything up
-            err.total = err.eph_prop + err.clk_prop;
-            var.total = var.eph_est + var.eph_prop + var.clk_est + var.clk_prop;
+            err.total = err.eph_prop + err.clk_prop + err.eph_mdl + err.clk_mdl;
+            var.total = var.eph_est + var.eph_prop + var.eph_mdl + ...
+                        var.clk_est + var.clk_prop + var.clk_mdl;
         end
 
         function [erec,vrec,mask] = getUEE(obj,ts,r,dr,user,los,mask)
@@ -339,7 +360,7 @@ classdef NavSatellite < handle
             end
         end
 
-        function [xn,Pn] = getnavstates(obj,ts)
+        function [xn,Pn] = getnavstates(obj,ts,frame)
             %GETNAVSTATES Returns estimated state and covariance from the 
             %navigation filter at the provided times in the J2000 frame.
             %   Input:
@@ -350,11 +371,12 @@ classdef NavSatellite < handle
             arguments
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
+                frame   (1,:)   {mustBeText} = 'J2000'
             end
 
             xn = zeros(9, length(ts));
             if isa(obj.filter, 'struct')
-                xn(1:6,:) = obj.traj(1).get(ts, 'J2000');
+                xn(1:6,:) = obj.traj(1).get(ts, frame);
                 xn(7:9,:) = obj.traj(2).get(ts);
                 % add noise to reference trajectory for nav states
                 xn = mvnrnd(xn', obj.filter.P0)';
@@ -368,7 +390,7 @@ classdef NavSatellite < handle
 
             elseif isempty(obj.filter)
                 % no filter at all, return truth states
-                xn(1:6,:) = obj.traj(1).get(ts, 'J2000');
+                xn(1:6,:) = obj.traj(1).get(ts, frame);
                 xn(7:9,:) = obj.traj(2).get(ts);
                 Pn = repmat(zeros(9,9), 1, 1, length(ts));
 
