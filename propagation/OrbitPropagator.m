@@ -29,12 +29,13 @@ classdef OrbitPropagator < Propagator
         % inertial to body-fixed transformations for t_pre (used in
         % spherical harmonics)
         q_I2F   (1,:)   quaternion
+
+        % CT velocity process noise in the RTN frame
+        Qrtn    (3,3)   double = zeros(3,3)
     end
-    properties (Access=private)
+    properties (Access=protected)
         % precomputed factorial for harmonics calculations %
         fact (:,:) = 0
-    end
-    properties (Constant, Access=private)
         % solar radiation pressure constants %
         % kN/m^2 (Pa), solar radiation pressure at Earth, given by the solar
         % constant at Earth (W/m^2) divided by the speed of light (m/s)
@@ -47,10 +48,12 @@ classdef OrbitPropagator < Propagator
         Re = 6378.1366
         % km, radius of the moon
         Rm = 1737.4
+        % unit multiplier (1e3 if m, 1 if km)
+        unit = 1
     end
     
     methods
-        function obj = OrbitPropagator(ord,varargin)
+        function obj = OrbitPropagator(ord,options)
             %ORBITPROPAGATOR Construct an OrbitPropagator instance.
             %   Inputs:
             %    - ord; maximum degree and order of gravity model to use
@@ -68,43 +71,31 @@ classdef OrbitPropagator < Propagator
             %       encompass any propagation intervals called in the
             %       future, otherwise errors will occur.
             arguments
-                ord     (1,1)   {mustBeInteger,mustBePositive}
-            end
-            arguments (Repeating)
-                varargin
+                ord             (1,1)   {mustBeInteger,mustBePositive}
+                options.opts    (1,1)   struct = odeset("RelTol", 1e-9, "AbsTol", 1e-11)
+                options.Cr      (1,1)   double {mustBeNonnegative} = 0
+                options.Am      (1,1)   double {mustBeNonnegative} = 0
+                options.pre     (1,1)   double = 0
+                options.units   (1,1)   {mustBeText} = "km"
             end
 
             % manage basic arguments
             obj.ord = ord;
-            obj.opts = odeset("RelTol", 1e-9, "AbsTol", 1e-11);
+            obj.opts = options.opts;
+            obj.Cr = options.Cr;
+            obj.Am = options.Am;
+            obj.pre = options.pre;
             obj.t_pre = [];
-            default = 1;
-            try
-                varargin = varargin{1};
-            catch
-                varargin = {};
-            end
 
-            if nargin > default
-                for i=1:2:length(varargin)
-                    if strcmp(varargin{i}, "opts")
-                        obj.opts = varargin{i+1};
-                    elseif strcmp(varargin{i}, "Cr")
-                        obj.Cr = varargin{i+1};
-                    elseif strcmp(varargin{i}, "A/m")
-                        obj.Am = varargin{i+1};
-                    elseif strcmp(varargin{i}, "preallocate")
-                        obj.pre = 1;
-                        obj.t_pre = varargin{i+1};
-                    elseif ~isempty(varargin)
-                        error("OrbitPropagator:invalidArgument", ...
-                            "%s is not a valid optional argument.", ...
-                            convertCharsToStrings(varargin{i}));
-                    end
-                end
-            elseif nargin < default
-                error("OrbitPropagator:nargin", "Too few arguments.");
-            end
+            if strcmpi(options.units, "m")
+                obj.AU = obj.AU * 1e3;
+                obj.Re = obj.Re * 1e3;
+                obj.Rm = obj.Rm * 1e3;
+                obj.unit = 1e3;
+            elseif ~strcmpi(options.units, "km")
+                error("OrbitPropagator:invalidUnit", ...
+                    "%s is not a supported unit. Choose 'm' or 'km'.", options.units);
+            end 
 
             % precompute factorial for harmonics
             n = 1:ord+1; m = 1:ord+1;
@@ -145,7 +136,7 @@ classdef OrbitPropagator < Propagator
                 obj     (1,1)   OrbitPropagator
                 ts      (1,:)   double
                 x0      (6,:)   double
-                frame   (1,:)   char
+                frame   (1,:)   char = 'J2000'
             end
 
             n = length(ts);
@@ -164,6 +155,8 @@ classdef OrbitPropagator < Propagator
                     return;
                 elseif n == 1
                     X = X(:,end);
+                elseif n == 2
+                    X = [X(:,1) X(:,end)];
                 end
 
                 if ~strcmp(frame, 'J2000')  % transform if necessary
@@ -266,13 +259,13 @@ classdef OrbitPropagator < Propagator
             % compute SRP
             f_SRP = 0;
             if obj.Am > 0
-                x_1sun = cspice_spkpos('SUN', t, 'J2000', 'NONE', obj.pri.name);
+                x_1sun = cspice_spkpos('SUN', t, 'J2000', 'NONE', obj.pri.name) * obj.unit;
                 x_ssun = x_1sun - x_1s;
                 r_ssun = norm(x_ssun);
-                x_1e = cspice_spkpos('EARTH', t, 'J2000', 'NONE', obj.pri.name);
+                x_1e = cspice_spkpos('EARTH', t, 'J2000', 'NONE', obj.pri.name) * obj.unit;
                 x_se = x_1e - x_1s;
                 r_se = norm(x_se);
-                x_1m = cspice_spkpos('MOON', t, 'J2000', 'NONE', obj.pri.name);
+                x_1m = cspice_spkpos('MOON', t, 'J2000', 'NONE', obj.pri.name) * obj.unit;
                 x_sm = x_1m - x_1s;
                 r_sm = norm(x_sm);
 
@@ -364,6 +357,43 @@ classdef OrbitPropagator < Propagator
             A(4:6,1:3) = A(4:6,1:3) + T * 3*obj.pri.GM*obj.pri.R^2*J2/2 * V1 * T';
         end
 
+        function A = numpart(obj,t,x)
+            %NUMPART Returns the CT dynamics matrix at time t, computed
+            %using central differences.
+            h = 1e-6;
+            n = 6;
+            A = zeros(n,n);
+
+            for i=1:n
+                dx = zeros(n,1);
+                dx(i) = h;
+                A(:,i) = (obj.dynamics(t,x+dx) - obj.dynamics(t,x-dx))/(2*h);
+            end
+        end
+
+        function Phi = getSTM(obj,t0,tf,x0)
+            %GETSTM Returns the state transition matrix between times t0
+            %and tf, given the states at those times.
+            %   Will use second order Taylor approximation of the STM,
+            %   which (according to Nav. Filter Best Practices) is only
+            %   valid up to 1 second. Therefore, we'll do it discretely in
+            %   multiple steps of 0.5s.
+
+
+            n = 6;
+            ts = t0:0.5:tf;
+            ts = [ts < tf, tf];
+            dt = ts(2:end) - ts(1:end-1);
+            xi = x0;
+            Phi = eye(n);
+
+            for i=length(dt)
+                Ai = obj.numpart(ts(i), xi);
+                Phi = (eye(n) + Ai*dt(i) + Ai^2*dt(i)^2/2)*Phi;
+                xi = Phi * x0;
+            end
+        end
+
         function P = proplyapunov(obj,ts,x0,P0)
             %PROPLYAPUNOV Propagates Lyapunov equations (obj.lyapunov) between 
             %provided times and outputs covariance matrices.
@@ -394,6 +424,25 @@ classdef OrbitPropagator < Propagator
             for i=1:length(ts)
                 P(:,:,i) = reshape(Y(i,7:end)', obj.dim, obj.dim);
             end
+        end
+
+        function Q = noise(obj,dt,x)
+            %PNC Returns the discrete-time process noise covariance over
+            %the time interval dt.
+            %   Input:
+            %    - dt; time interval, in s
+            %    - x; satellite state, in J2000
+            
+            % solve for orbit radial, tangential, and normal directions
+            R = x(1:3);
+            N = cross(R,x(4:6));
+            T = cross(N,R);
+            % normalize to unit vectors
+            R = R/norm(R); T = T/norm(T); N = N/norm(N);
+            % RTN to J2000 frame
+            M = [R T N];
+            Qbar = M*obj.Qrtn*M';
+            Q = [Qbar*dt^3/3 Qbar*dt^2/2; Qbar*dt^2/2 Qbar*dt];
         end
 
         function [fx,C] = modelfit(obj,traj,t0,type,N)
@@ -485,6 +534,65 @@ classdef OrbitPropagator < Propagator
     end
 
     methods
+        function plotelements(obj,traj,frame)
+            %PLOTELEMENTS Plots the orbital elements of a given trajectory.
+
+            n = length(traj.ts);
+            as = zeros(1,n);
+            es = zeros(1,n);
+            is = zeros(1,n);
+            RAANs = zeros(1,n);
+            ws = zeros(1,n);
+            fs = zeros(1,n);
+
+            for i=1:n
+                [as(i) es(i) is(i) RAANs(i) ws(i) fs(i)] = ...
+                    rv2oe(traj.get(traj.ts(i), frame), obj.pri.GM);
+            end
+
+            is = is * 180/pi;
+            RAANs = RAANs * 180/pi;
+            ws = ws * 180/pi;
+            fs = fs * 180/pi;
+            tplot = (traj.ts - traj.t0) / 3600;
+
+            figure();
+            plotformat("APA", 1);
+            tiledlayout(3,2);
+
+            nexttile;
+            plot(tplot,as);
+            grid on;
+            ylabel("Semimajor axis");
+
+            nexttile;
+            plot(tplot, es);
+            grid on;
+            ylabel("Eccentricity");
+
+            nexttile;
+            plot(tplot, is);
+            grid on;
+            ylabel("Inclination");
+
+            nexttile;
+            plot(tplot, RAANs);
+            grid on;
+            ylabel("Right ascension");
+
+            nexttile;
+            plot(tplot, ws);
+            grid on;
+            xlabel("Time (hrs)");
+            ylabel("Arg. of periapsis");
+
+            nexttile;
+            plot(tplot, fs);
+            grid on;
+            xlabel("Time (hrs)");
+            ylabel("True anomaly");
+        end
+
         function f = fast_harmonics(obj,x)
             %FAST_HARMONICS compute gravitational acceleration from spherical
             %harmonics of body

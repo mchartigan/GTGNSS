@@ -17,6 +17,8 @@ classdef Clock < Propagator
         markov  (1,1)   {mustBeNumericOrLogical} = false        % are markov processes included?
         dim     = 3                                             % dimension of state
         m       (1,1)   {mustBeInteger,mustBeNonnegative} = 0   % number of markov processes
+        % override noise param (for filtering)
+        random  = true
 
         % FIT UNCERTAINTY PARAMETERS %
         % white phase noise
@@ -73,13 +75,13 @@ classdef Clock < Propagator
                 name                (1,:)   {mustBeText}
                 x                   (:,1)   double {mustBeNonnegative}
                 options.debug       (1,1)   {mustBeNumericOrLogical} = false
-                options.normalize   (1,1)   {mustBeNumericOrLogical} = false
+                options.normalize   (1,1)   {mustBePositive} = 1
             end
             
             % ASSIGN FROM INPUT OPTIONS %
             obj.assignclockdata(name);
             obj.DEBUG = options.debug;
-            if options.normalize, obj.norm = obj.c; end
+            obj.norm = options.normalize;
 
             % ASSIGN FIT VARIANCES %
             obj.sigma_wp = x(1) * obj.norm;
@@ -88,7 +90,7 @@ classdef Clock < Propagator
             obj.sigma_rr = x(4) * obj.norm;
             % Markov process info
             obj.m = (length(x) - 4)/2;
-            obj.dim = 3 + obj.m*2;
+            obj.dim = 3 + obj.m;
             obj.sigma_m  = zeros(obj.m, 1);
             obj.R        = ones(obj.m, 1);
             for i=1:2:2*obj.m
@@ -100,7 +102,7 @@ classdef Clock < Propagator
             obj.a = obj.a * obj.norm;
         end
 
-        function [ts,xs] = run(obj,ts,x0,n)
+        function [ts,xs] = run(obj,ts,x0,n,noise)
             %RUN Propagate the input states for tf seconds (n steps
             %between).
             %   Input:
@@ -112,18 +114,19 @@ classdef Clock < Propagator
             %    - xs; clock states at ts
             %    - vs; clock covariance at ts
             arguments
-                obj (1,1)   Clock
-                ts  (1,1)   double {mustBePositive}
-                x0  (3,1)   double
-                n   (1,1)   {mustBeInteger,mustBePositive}
+                obj     (1,1)   Clock
+                ts      (1,2)   double {mustBePositive}
+                x0      (:,1)   double
+                n       (1,1)   {mustBeInteger,mustBePositive}
+                noise   (1,1)   = true
             end
 
             % initialize variables
             ts = linspace(ts(1),ts(end),n);
-            xs = obj.runat(ts,x0);
+            xs = obj.runat(ts,x0,noise);
         end
 
-        function xs = runat(obj,ts,x0)
+        function xs = runat(obj,ts,x0,noise)
             %RUNAT Propagate the input states over the provided time steps.
             %   Input:
             %    - ts; eval time steps, seconds past t0
@@ -132,9 +135,10 @@ classdef Clock < Propagator
             %    - xs; clock states at ts
             %    - vs; clock covariance at ts
             arguments
-                obj (1,1)   Clock
-                ts  (1,:)   double {mustBeNonnegative}
-                x0  (3,1)   double
+                obj     (1,1)   Clock
+                ts      (1,:)   double {mustBeNonnegative}
+                x0      (:,1)   double
+                noise   (1,1)   = true
             end
             
             rng(obj.seed)       % initialize rng for consistency
@@ -142,7 +146,7 @@ classdef Clock < Propagator
             % initialize variables
             n = length(ts);
             xs = zeros(obj.dim,n);
-            xs(1:3,1) = x0;
+            xs(:,1) = x0;
             % set starting state of Markov processes as RV with mean 0 and
             % variance U = sigma_m^2/(2*R)
             for i=1:obj.m
@@ -153,9 +157,12 @@ classdef Clock < Propagator
                 dt = ts(i) - ts(i-1);
                 stm = obj.STM(dt);
             
-                % innovation vector, J ~ N(0,Q)
-                J = mvnrnd(zeros(1,obj.dim), obj.processnoise(dt), 1)';
-                xs(:,i) = stm * xs(:,i-1) + J;
+                xs(:,i) = stm * xs(:,i-1);
+                if noise && obj.random
+                    % innovation vector, J ~ N(0,Q)
+                    J = mvnrnd(zeros(1,obj.dim), obj.noise(dt), 1)';
+                    xs(:,i) = xs(:,i) + J;
+                end
             end
         end
 
@@ -195,7 +202,9 @@ classdef Clock < Propagator
             obj.a = data.aging / 86400;     % convert s/s/day -> s/s/s
             obj.t_stab  = data.stability.int;
             obj.s_stab  = data.stability.dev;
-            obj.s_had   = data.stability.hadamard;
+            if isfield(data.stability, "hadamard")
+                obj.s_had   = data.stability.hadamard;
+            end
             obj.f_noise = data.phase_noise.freq;
             obj.n_noise = data.phase_noise.noise;
         end
@@ -221,7 +230,7 @@ classdef Clock < Propagator
             % store covariance matrices in appropriate structure
             for i=2:length(ts)
                 Phi = obj.STM(ts(i)-ts(i-1));
-                Qi = obj.processnoise(ts(i)-ts(i-1));
+                Qi = obj.noise(ts(i)-ts(i-1));
                 P(:,:,i) = Phi*P(:,:,i-1)*Phi' + Qi;
             end
         end
@@ -260,9 +269,8 @@ classdef Clock < Propagator
             s = part_WFM + part_RWFM + part_RRFM + part_M;
         end
 
-        function Q = processnoise(obj,dt)
-            %PROCESSNOISE Returns the discrete-time covariance associated
-            %w/ the Wiener processes.
+        function Q = noise(obj,dt,~)
+            %PNC Returns the discrete-time process noise covariance.
             %   Input:
             %    - tau; time step
 
@@ -352,8 +360,12 @@ classdef Clock < Propagator
             if obj.norm == 1
                 units = "ns";
                 xs = xs * 1e9;
-            else
+            elseif obj.norm == 1e9
+                units = "ns";
+            elseif obj.norm == obj.c
                 units = "m";
+            else
+                error("Clock:plot", "Unsupported normalization scheme.");
             end
 
             dt = ts - ts(1);
@@ -364,8 +376,12 @@ classdef Clock < Propagator
             elseif dt(end) > 3600
                 time = "hrs";
                 tplot = dt / 3600;
+            elseif dt(end) > 120
+                time = "min";
+                tplot = dt / 60;
             else
                 time = "s";
+                tplot = dt;
             end
 
             
@@ -391,28 +407,34 @@ classdef Clock < Propagator
 
             sgtitle("Clock trajectory");
         end
-    end
 
-    methods (Static)
-        function dxdt = dynamics(~,x)
+        function dxdt = dynamics(obj,~,x)
             %DYNAMICS Invokes the clock dynamics based on the Zucca and
             %Tavella paper.
             %   Input:
             %    - t; simulation time, not used
             %    - x; current clock state
 
-            dxdt = [0 1 0; 0 0 1; 0 0 0] * x;
+            dxdt = obj.partials() * x;
         end
 
-        function A = partials(~,~)
+        function A = partials(obj,~,~)
             %PARTIALS Invokes the partials of dynamics.
             %   Input:
             %    - t; simulation time, not used
-            %    - x; current clock state, also not used lol
+            %    - x; current clock state, used for dimension
+            A = zeros(3+obj.m,3+obj.m);
 
-            A = [0 1 0; 0 0 1; 0 0 0];
+            A(1:3,1:3) = [0 1 0; 0 0 1; 0 0 0];
+
+            if obj.m > 0
+                A(1,4:end) = 1;
+                A(4:end,4:end) = diag(-obj.R);
+            end
         end
+    end
 
+    methods (Static)
         function [fx,C] = modelfit(traj,t0)
             %MODELFIT Returns a second-order polynomial model for the clock
             %state over time. Starting epoch is the current t0, x0

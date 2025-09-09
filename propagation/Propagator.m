@@ -38,10 +38,11 @@ classdef (Abstract) Propagator < handle
     methods (Abstract)
         out = run(obj,ts,x0,n)      % run to final time w/ equispaced steps
         out = runat(obj,ts,x0)      % run to specific times
-        out = modelfit(obj)         % fit an approximation model to the result
+        % out = modelfit(obj)         % fit an approximation model to the result
         dxdt = dynamics(obj,t,x)    % partial differential equations governing dynamics
         A = partials(obj,t,x)       % jacobian of dynamics
-        P = proplyapunov(obj,ts,P0) % function to propagate lyapunov equations
+        % P = proplyapunov(obj,ts,P0) % function to propagate lyapunov equations
+        Q = noise(obj,dt,x)         % process noise covariance
     end
 end
 

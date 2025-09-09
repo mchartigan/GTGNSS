@@ -7,13 +7,13 @@ classdef User < handle
         motion  (1,1)   Trajectory
         clock   (1,1)   Trajectory
         % receiver
-        rec     (1,1)   Receiver
+        rx      (1,1)   Receiver
         % receiver antenna
         ant     (1,1)   ReceiveAntenna
     end
     
     methods
-        function obj = User(motion,clock,rec,ant)
+        function obj = User(motion,clock,rx,ant)
             %USER Construct a User instance.
             %   Input:
             %    - motion; user motion Trajectory instance
@@ -22,10 +22,12 @@ classdef User < handle
             %    - rec; Receiver object instance
             %    - ant; ReceiveAntenna object instance
 
-            obj.motion = motion;
-            obj.clock = clock;
-            obj.rec = rec;
-            obj.ant = ant;
+            if nargin ~= 0
+                obj.motion = motion;
+                obj.clock = clock;
+                obj.rx = rx;
+                obj.ant = ant;
+            end
         end
         
         function x = getstates(obj,ts,frame)

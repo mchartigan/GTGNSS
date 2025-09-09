@@ -7,13 +7,15 @@ classdef NavSatellite < handle
         % [satellite reference trajectory; clock reference trajectory]
         traj    (2,1)   Trajectory
         % propagator instance (default one so MATLAB doesn't throw a fit)
-        prop    (1,1)   SatellitePropagator
+        prop    (1,1)   SatellitePropagator = SatellitePropagator(OrbitPropagator(1),Clock("none", zeros(4,1)) )
         % nav filter
         filter
         % antenna object
         ant     (1,1)   TransmitAntenna
         % nav message update cadence info
         cadence (1,1)   double {mustBeNonnegative}
+        % nav message coefficient count (per axis, so will be 3x)
+        ncoef   (1,1)   {mustBeNonnegative,mustBeInteger} = 10
         % reference state info (avoids recalling runto() on prop and clock
         % if data has already been requested before
         tr      (1,:)   double = []
@@ -98,6 +100,9 @@ classdef NavSatellite < handle
                 obj.ID = ID;
                 if ~debug, warning('off', 'NavSatellite:debug'); end
                 obj.DEBUG = debug;
+
+                % enforce attributes
+                
             end
         end
 
@@ -136,14 +141,15 @@ classdef NavSatellite < handle
 
             % OUTPUT FORMATTING %
             % add applicable error to delay and Doppler
-            T  = r / obj.c  + err.total(1,:);
-            dT = dr / obj.c + err.total(2,:);
+            xc = obj.traj(2).get(tt);
+            T  = r  - xc(1,:) - err.clk_prop(1,:);
+            dT = dr - xc(2,:) - err.clk_prop(2,:);
 
             % ANTENNA MASK %
             AP = obj.txlinkbudget(r);
             % add transmitter mask to link budget %
-            xuser = user.getstates(ts, 'J2000');
-            xsat  = obj.traj(1).get(tt, 'J2000');
+            xuser = user.getstates(ts, 'MOON_ME');
+            xsat  = obj.traj(1).get(tt, 'MOON_ME');
             % get nadir direction at user at each time step
             nadir = xuser(1:3,:) ./ sqrt(sum(xuser(1:3,:).^2, 1));
             % get zenith direction at sat at each time step
@@ -157,7 +163,7 @@ classdef NavSatellite < handle
             AP = AP - 300 * (touser > pi/2 - obj.ant.mask);
 
             % PLANET INTERSECTION CALCULATION %
-            R = cspice_bodvrd('MOON', 'RADII', 3);
+            R = cspice_bodvrd('MOON', 'RADII', 3) * 1e3;
             R = R(1);           % radius of moon
             for i=1:length(ts)
                 x_s = xsat(1:3,i);
@@ -199,21 +205,24 @@ classdef NavSatellite < handle
             end
 
             n = length(ts);     % no. of measurements
+            frame = 'MOON_ME';
             % get reference trajectory of satellite and clock
             xref = zeros(9,n);
-            xref(1:6,:) = obj.traj(1).get(tt, 'MOON_ME');
+            xref(1:6,:) = obj.traj(1).get(tt, frame);
             xref(7:9,:) = obj.traj(2).get(tt);
             % get reference trajectory of user
-            xuser = user.getstates(ts, 'MOON_ME');
+            xuser = user.getstates(ts, frame);
             
             % create line-of-sight direction
             los = xref(1:3,:,1) - xuser(1:3,:,1);
             los = los ./ sqrt(sum(los.^2, 1));
 
             % generate nav update times
-            tmsg = [tt(1)-1:obj.cadence:tt(end) tt(end)];
-            [xmsg, Pmsg] = obj.getnavstates(tmsg, 'MOON_ME');
-            msg = zeros(length(tmsg)-1, 19);
+            % start whenever the satellite starts :)
+            tmsg = obj.traj(1).ts(1):obj.cadence:tt(end);
+            if tmsg(end) ~= tt(end), tmsg = [tmsg tt(end)]; end
+            [xmsg, Pmsg] = obj.getnavstates(tmsg, frame);
+            msg = zeros(length(tmsg)-1, 23+3*obj.ncoef);
             Pnav = zeros(9,9,n);        % store starting uncertainty
             xprop = zeros(9,n);         % store the propagated states
             Pprop = zeros(9,9,n);
@@ -225,139 +234,84 @@ classdef NavSatellite < handle
             err.eph_mdl  = zeros(2,n);      % error due to ephemeris parameterization
             err.clk_prop = zeros(2,n);      % error due to clock est. and propagation
             err.clk_mdl  = zeros(2,n);      % error due to clock parameterization
-            var.eph_est  = zeros(2,n);      % variance of initial OD
-            var.eph_prop = zeros(2,n);      % variance of state propagation (-OD)
+            err.group    = zeros(2,n);      % residual of group delay calibration error
+            var.eph_prop = zeros(2,n);      % variance of initial OD and propagation
             var.eph_mdl  = zeros(2,n);      % variance of ephemeris parameterization
-            var.clk_est  = zeros(2,n);      % variance of initial clock est.
-            var.clk_prop = zeros(2,n);      % variance of clock propagation (-est.)
+            var.clk_prop = zeros(2,n);      % variance of clock est. and propagation
             var.clk_mdl  = zeros(2,n);      % variance of clock parameterization
+            var.group    = zeros(2,n);      % variance of group delay calibration error
+            var.phase    = zeros(2,n);      % variance due to clock phase noise
 
             % iterate over update times
             for i=1:length(tmsg)-1
                 % nav states are applicable starting at tt(1)-1, so this logic
                 % should cover all tt
-                jj = and(tt > tmsg(i), tt <= tmsg(i+1));
-                % store nav uncertainty
-                Pnav(:,:,jj) = repmat(Pmsg(:,:,i), 1, 1, length(jj));
+                jj = and(tt > tmsg(i), tt < tmsg(i+1));
+                % % store nav uncertainty
+                % Pnav(:,:,jj) = repmat(Pmsg(:,:,i), 1, 1, length(jj));
                 % propagate states over given times. tmsg(i) provided so
                 % trajectory starts at appropriate time
-                tsub = [tmsg(i) tt(jj)];
-                xsub = obj.prop.runat(tsub, xmsg(:,i), 'MOON_ME');
-                % cut out xmsg(:,i) since it may not align with tt
-                xprop(:,jj) = xsub(:,2:end);
-                Pprop(:,:,jj) = ...
-                    obj.prop.proplyapunov(tt(jj), xmsg(:,i), Pmsg(:,:,i));
+                tsub = [tmsg(i) tmsg(i+1)];
+                [ts,xsub] = obj.prop.run(tsub, xmsg(:,i), 1000, frame, false);
                 % provide these propagated states (plus initial one) as a
                 % Trajectory and create a navigation message about it.
-                subeph = Trajectory(tsub, xsub(1:6,:), 'MOON_ME');
-                subclk = Trajectory(tsub, xsub(7:9,:));
+                subeph = Trajectory(ts, xsub(1:6,:), frame);
+                subclk = Trajectory(ts, xsub(7:9,:));
                 msg(i,:) = obj.generatenavmsg([subeph; subclk]);
 
-                % compute model states and all errors/variances
-                for k=find(jj)
-                    xmdl(:,k) = RadiometricObsSim.geteph(tt(k), obj.ID, msg(i,:));
-
-                    % compute time step errors
-                    err_prop = xprop(:,k) - xref(:,k);
-                    err_mdl = xmdl(:,k) - xprop(:,k);
-
-                    % range and range-rate error (in s and s/s) due to propagation
-                    err.eph_prop(1,k) = err_prop(1:3)' * los(:,k) / obj.c_km;
-                    err.eph_prop(2,k) = err_prop(4:6)' * los(:,k) / obj.c_km;
-                    % " due to ephemeris model
-                    err.eph_mdl(1,k) = err_mdl(1:3)' * los(:,k) / obj.c_km;
-                    err.eph_mdl(2,k) = err_mdl(4:6)' * los(:,k) / obj.c_km;
-                    % " due to onboard clock offset from proper time
-                    err.clk_prop(:,k) = err_prop(7:8) / obj.c;
-                    % " due to clock model
-                    err.clk_mdl(:,k) = err_mdl(7:8) / obj.c;
-                    % variance from OD (in s^2 and s^2/s^2)
-                    var.eph_est(1,k) = los(:,k)' * Pnav(1:3,1:3,k) * los(:,k) / obj.c_km2;
-                    var.eph_est(2,k) = los(:,k)' * Pnav(4:6,4:6,k) * los(:,k) / obj.c_km2;
-                    var.clk_est(:,k) = diag(Pnav(7:8,7:8,k)) / obj.c2; 
-                    % " from state propagation
-                    var.eph_prop(1,k) = los(:,k)' * Pprop(1:3,1:3,k) * los(:,k) / obj.c_km2;
-                    var.eph_prop(2,k) = los(:,k)' * Pprop(4:6,4:6,k) * los(:,k) / obj.c_km2;
-                    var.clk_prop(:,k) = diag(Pprop(7:8,7:8,k)) / obj.c2;
+                if sum(jj)
+                    % cut out xmsg(:,i) since it may not align with tt
+                    xprop(:,jj) = [subeph.get(tt(jj), frame); subclk.get(tt(jj))];
+                    Ptemp = obj.prop.proplyapunov([ts(1) tt(jj)], xsub(:,1), Pmsg(:,:,i));
+                    Pprop(:,:,jj) = Ptemp(:,:,2:end);
+    
+                    % compute model states and all errors/variances
+                    for k=find(jj)
+                        xmdl(:,k) = RadiometricObsSim.geteph(tt(k), obj.ID, msg(i,:));
+    
+                        % compute time step errors
+                        err_prop = xprop(:,k) - xref(:,k);
+                        err_mdl = xmdl(:,k) - xprop(:,k);
+    
+                        % range and range-rate error (in m and m/s) due to propagation
+                        err.eph_prop(1,k) = err_prop(1:3)' * los(:,k); % / obj.c_km;
+                        err.eph_prop(2,k) = err_prop(4:6)' * los(:,k); % / obj.c_km;
+                        % " due to ephemeris model
+                        err.eph_mdl(1,k) = err_mdl(1:3)' * los(:,k); % / obj.c_km;
+                        err.eph_mdl(2,k) = err_mdl(4:6)' * los(:,k); % / obj.c_km;
+                        % " due to onboard clock offset from proper time
+                        % (negative to account for how it impacts the measurement)
+                        err.clk_prop(:,k) = err_prop(7:8);
+                        % " due to clock model
+                        err.clk_mdl(:,k) = err_mdl(7:8);
+                        % variance from OD and state propagation (in m^2 and m^2/s^2)
+                        var.eph_prop(1,k) = los(:,k)' * Pprop(1:3,1:3,k) * los(:,k); % / obj.c_km2;
+                        var.eph_prop(2,k) = los(:,k)' * Pprop(4:6,4:6,k) * los(:,k); % / obj.c_km2;
+                        var.clk_prop(:,k) = diag(Pprop(7:8,7:8,k));
+                    end
+    
+                    % " from parameterization (computed in batch)
+                    var.eph_mdl(:,jj) = repmat(sum(err.eph_mdl(:,jj).^2, 2)/(sum(jj)-1), 1, sum(jj));
+                    var.clk_mdl(:,jj) = repmat(sum(err.clk_mdl(:,jj).^2, 2)/(sum(jj)-1), 1, sum(jj));
                 end
-
-                % " from parameterization (computed in batch)
-                var.eph_mdl(:,jj) = repmat(std(err.eph_mdl(:,jj), 0, 2).^2, 1, length(jj));
-                var.clk_mdl(:,jj) = repmat(std(err.clk_mdl(:,jj), 0, 2).^2, 1, length(jj));
             end
 
-            % total everything up
-            err.total = err.eph_prop + err.clk_prop + err.eph_mdl + err.clk_mdl;
-            var.total = var.eph_est + var.eph_prop + var.eph_mdl + ...
-                        var.clk_est + var.clk_prop + var.clk_mdl;
-        end
+            % work group delays (calibration error, not evolving over time)
+            var.group(1,:) = 0.1^2;
+            err.group(1,:) = mvnrnd(0, var.group(1,1));
+            % phase noise and frequency stability (already in error but not
+            % variance budget)
+            var.phase(1,:) = (1e-4)^2;
+            var.phase(2,:) = (4.3e-5)^2;
 
-        function [erec,vrec,mask] = getUEE(obj,ts,r,dr,user,los,mask)
-            %GETUEE Returns the user equipment error for a given set of
-            %parameters.
-            %   Input:
-            %    - ts; measurement times in seconds past J2000
-            %    - r; transmitter-receiver ranges (m) to compute error for
-            %    - dr; transmitter-receiver range-rates (mm/s)
-            %    - user; User object instance
-            %    - los; line-of-sight direction from user to satellite
-            %    - mask; pre-existing mask for range and -rate measurements
-            arguments
-                obj     (1,1)   NavSatellite
-                ts      (1,:)   double
-                r       (1,:)   double {mustBePositive}
-                dr      (1,:)   double
-                user    (1,1)   User
-                los     (3,:)   double
-                mask    (2,:)   double = []
-            end
-
-            % compute link budget and receiver noise
-            CN0 = obj.txlinkbudget(user, r);
-            % add mask to link budget %
-            % get nadir direction at user at each time step
-            nadir = user.xs(1:3,:) ./ sqrt(sum(user.xs(1:3,:).^2, 1));
-            % get zenith direction at sat at each time step
-            zenith = -obj.xr(1:3,:) ./ sqrt(sum(obj.xr(1:3,:).^2, 1));
-            % compute angle between nadir and satellite
-            tosat = acos(sum(nadir .* los, 1));
-            touser = acos(sum(zenith .* -los, 1));
-            % -300 dB/Hz if angle is over off-boresight mask angle
-            CN0 = CN0 - 300 * (tosat > pi/2 - user.ant.mask);
-            CN0 = CN0 - 300 * (touser > pi/2 - obj.ant.mask);
-            % if 1
-            %     RP = CN0(CN0 > -200);
-            %     figure();
-            %     plot(RP);
-            %     fprintf("max: %f\nmin: %f\n", max(RP), min(RP));
-            % end
-            [erec, vrec, mask1] = user.rec.noise(CN0, ts, r, dr, obj.clock);
-
-            % build and assign mask
-            if ~isempty(mask)
-                mask = and(mask1, mask);
-            else
-                mask = mask1;
-            end
-
-            % plot CN0 for simulation
-            if obj.DEBUG
-                figure();
-                plotformat("APA", 0.4, "scaling", 1, "coloring", "science");
-                elev = (pi/2 - tosat) * 180/pi;
-                plot(elev(mask(1,:)), CN0(mask(1,:)), "LineWidth", 2);
-                grid on;
-                xlabel("Elevation angle (\circ)");
-                ylabel("C/N0 (dB-Hz)");
-                title("C/N0 vs. User Antenna Elevation Angle");
-
-                figure();
-                plotformat("APA", 0.4, "scaling", 1, "coloring", "science");
-                plot(tosat(mask(1,:)) * 180/pi, touser(mask(1,:)) * 180/pi, "LineWidth", 2);
-                grid on;
-                xlabel("User off-boresight angle (\circ)");
-                ylabel("Satellite off-boresight angle (\circ)");
-            end
+            % Apply only the errors that will occur due to signal
+            % transmission. We're making this realistic here!
+            % (i.e. let user make the modeling errors themselves)
+            err.total = -err.clk_prop + err.eph_mdl + err.eph_prop + ...
+                        err.clk_mdl + err.group;
+            % Keep all the variance terms just for budgeting
+            var.total = var.eph_prop + var.eph_mdl + var.clk_prop + ...
+                        var.clk_mdl + var.group + var.phase;
         end
 
         function [xn,Pn] = getnavstates(obj,ts,frame)
@@ -438,7 +392,7 @@ classdef NavSatellite < handle
             T_GD = 0;       % group delay offset b/n broadcast freqs (normal group delay can be added to af0)
 
             % update ephemeris
-            eph = obj.prop.orbit.AFSfit(traj_eph, 10);
+            eph = obj.prop.orbit.AFSfit(traj_eph, obj.ncoef);
             IODE = mod(floor(eph.t_oe), 1024);      % simple hash
 
             % update clock offsets
@@ -447,12 +401,12 @@ classdef NavSatellite < handle
             [~,D] = obj.prop.clock.modelfit(traj_clk, t0);
             af0 = D(1);
             af1 = D(2);
-            af2 = D(3);
+            af2 = D(3)/2;
 
             % store in array for quick access
             msg = [t0 obj.ID IODC IODE t_oc af0 af1 af2 T_GD ...
-                   eph.t_oe eph.a eph.e eph.i0 eph.RAAN0 eph.w0 eph.M0 ...
-                   eph.idot eph.RAANdot eph.wdot];
+                   eph.t_oe eph.a eph.e eph.i eph.RAAN eph.w eph.M0 ...
+                   eph.A eph.VP eph.Cx eph.Cy eph.Cz];
         end
 
         function AP = txlinkbudget(obj,r)
@@ -490,26 +444,24 @@ classdef NavSatellite < handle
 
             n = length(ts);
             xuser = user.getstates(ts, 'J2000');
-            xref0 = obj.traj(1).get(ts(1), 'J2000');
+            xref = obj.traj(1).get(ts, 'J2000');
 
             % initial guess for transmit time is receive time
             tt = ts;
             % instantaneous range at measurement times, in m
-            r = sqrt(sum((xref0(1:3,:) - xuser(1:3,:)).^2, 1)) * 1e3;
-            % final s/c states at tt
-            xref = zeros(6,n);
+            r = sqrt(sum((xref(1:3,:) - xuser(1:3,:)).^2, 1));
             % range-rate of measurements, in m/s
             dr = zeros(1,n);
 
             for i=1:n
                 rlast = r(i);
 
-                for j=1:100
+                for j=1:10
                     dt = rlast / obj.c;         % range to time-of-flight (s)
                     tj = ts(i) - dt;            % time offset guess
                     % updated range guess
                     xref(:,i) = obj.traj(1).get(tj, 'J2000');
-                    rj = norm(xref(1:3,i) - xuser(1:3,i)) * 1e3;
+                    rj = norm(xref(1:3,i) - xuser(1:3,i));
 
                     % if iteration is converging
                     if abs(rj - rlast) < tol
@@ -520,7 +472,7 @@ classdef NavSatellite < handle
 
                     rlast = rj;                 % update iteration
                 end
-                if j == 100
+                if j == 10
                     warning("timeofflight:notConverged", ...
                         "Time %d failed to converge in %d iterations.", i, j);
                 end
@@ -530,7 +482,7 @@ classdef NavSatellite < handle
                 los = xref(1:3,i) - xuser(1:3,i);
                 los = los / norm(los);
                 vrel = xref(4:6,i) - xuser(4:6,i);
-                dr(i) = vrel' * los * 1e3;      % convert km/s -> m/s
+                dr(i) = vrel' * los;
             end
         end
     end

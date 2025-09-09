@@ -10,7 +10,7 @@ classdef LunarPropagator < OrbitPropagator
     end
     
     methods
-        function obj = LunarPropagator(ord,nbods,varargin)
+        function obj = LunarPropagator(ord,nbods,options)
             %LUNARPROPAGATOR Construct a LunarPropagator instance.
             %   Inputs:
             %    - t0; character string, 'DD-MMM-YYYY XX:XX:XX', or double
@@ -25,25 +25,29 @@ classdef LunarPropagator < OrbitPropagator
             arguments
                 ord     (1,1)   {mustBeInteger,mustBePositive}
                 nbods   (1,1)   {mustBeInteger,mustBeNonnegative}
-            end
-            arguments (Repeating)
-                varargin
+                options.opts    (1,1)   struct = odeset("RelTol", 1e-9, "AbsTol", 1e-11)
+                options.Cr      (1,1)   double {mustBeNonnegative} = 0
+                options.Am      (1,1)   double {mustBeNonnegative} = 0
+                options.pre     (1,1)   double = 0
+                options.units   (1,1)   {mustBeText} = "km"
             end
 
             % call superclass constructor
-            obj = obj@OrbitPropagator(ord, varargin);
+            passargs = namedargs2cell(options);
+            obj = obj@OrbitPropagator(ord,passargs{:});
             
             cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
             % [R,C,S,norms] = cofloader("LP165P.cof", false);
             [R,C,S,norms] = sha_loader("gggrx_0900c_sha.tab", 200);
             
             % planetary info
-            bods = getplanets('MOON', "MOON", "EARTH", "SUN", "JUPITER");
-            bods(1).R = R * 1e-3;           % convert from m to km
+            bods = getplanets('MOON', obj.unit, "MOON", "EARTH", "SUN", "JUPITER");
+            bods(1).R = R * 1e-3 * obj.unit;    % convert from m to km if necessary
             bods(1).C = C;                  % store in moon struct for orbitaldynamics
             bods(1).S = S;                  % store in moon struct for orbitaldynamics
             bods(1).norms = norms;          % store in moon struct for orbitaldynamics
             bods(1).frame = 'MOON_PA';      % body-fixed frame of coefficients
+
             obj.pri = bods(1);              % primary body
             obj.sec = bods(2:nbods+1);      % secondary bodies
 
@@ -138,67 +142,95 @@ classdef LunarPropagator < OrbitPropagator
             end
         end
 
-        function fit = AFSfit(obj,traj,N)
+        function fit = AFSfit(obj,traj,n)
             %MODELFIT Fit the AFS navigation message ephemeris format to the
             %provided trajectory (not well defined atm lol).
             arguments
                 obj     (1,1)   LunarPropagator
                 traj    (1,1)   Trajectory
-                N       (1,1)   {mustBeInteger,mustBeNonnegative}
+                n       (1,1)   {mustBeInteger,mustBeNonnegative}
             end
+
+            diff = n > 0;
+            if ~diff, n = 10; end
 
             % use chebichev nodes for fitting
             t0 = traj.t0;
-            span = chebichev(32);
-            teval = (span + 1) * (traj.ts(end) - t0) / 2 + t0;
+            span = chebichev(n-1);
+            fit.VP = traj.ts(end) - t0;
+            teval = (span + 1) * fit.VP / 2 + t0;
             xeval = traj.get(teval, 'J2000');
             
             % change to orbital elements
-            n = length(teval);
-            
             as = zeros(1,n); es = zeros(1,n); is = zeros(1,n);
             RAANs = zeros(1,n); ws = zeros(1,n); fs = zeros(1,n);
+            A_I2ME = zeros(6,n);
             
             for k=1:n
                 [as(k),es(k),ik,Ok,wk,fs(k)] = rv2oe(xeval(:,k),obj.pri.GM);
-                % get perifocal to ICRF rotation matrix
-                T_P2I = rotz(-Ok) * rotx(-ik) * rotz(-wk);
-                % get perifocal to MOON ME rotation matrix
-                T_P2ME = cspice_pxform('J2000', 'MOON_ME', teval(k)) * T_P2I;
-                [Ok, ik, wk] = cspice_m2eul(T_P2ME, 3, 1, 3);
-                RAANs(k) = -Ok;
-                is(k) = -ik;
-                ws(k) = -wk;
+                % % get perifocal to ICRF rotation matrix
+                % T_P2I = rotz(-Ok) * rotx(-ik) * rotz(-wk);
+                % % get perifocal to MOON ME rotation matrix
+                % T_P2ME = cspice_pxform('J2000', 'MOON_ME', teval(k)) * T_P2I;
+                % [Ok, ik, wk] = cspice_m2eul(T_P2ME, 3, 1, 3);
+                RAANs(k) = Ok;
+                is(k) = ik;
+                ws(k) = wk;
+                T = cspice_sxform('J2000', 'MOON_ME', teval(k));
+                A_I2ME(:,k) = cspice_xf2eul(T,3,1,3);
             end
-            
-            % fit Moon rotation and mean elements
-            phi = (teval-t0)'.^(0:1);
-            B = pinv(phi);
-            C = B * RAANs';
-            D = B * is';
-            E = B * ws';
             
             fit.t_oe = traj.t0;
             fit.a = mean(as);
             fit.e = mean(es);
-            fit.i0 = D(1);
-            fit.idot = D(2);
-            fit.RAAN0 = C(1);
-            fit.RAANdot = C(2);
-            fit.w0 = E(1);
-            fit.wdot = E(2);
+            fit.i = mean(is);
+            fit.RAAN = mean(RAANs);
+            fit.w = mean(ws);
             fit.M0 = true2mean(fs(1), fit.e);
-        end
-    end
+            fit.A = [A_I2ME(1:3,1)' mean(A_I2ME(4:6,:), 2)'];
+            fit.Cx = [];
+            fit.Cy = [];
+            fit.Cz = [];
 
-    methods (Static)
-        function plot(traj,frame)
+            % DIFFERENTIAL CORRECTIONS %
+            if diff
+                % get effective Keplerian elements
+                kepmsg = [t0 0 0 0 0 0 0 0 0 fit.t_oe ...
+                          fit.a fit.e fit.i fit.RAAN fit.w fit.M0 fit.A];
+    
+                xbase = zeros(6,n);
+                for k=1:n
+                    [temp,T_J2ME] = RadiometricObsSim.geteph(teval(k), 0, kepmsg);
+                    T_ME2J = [T_J2ME(1:3,1:3)' zeros(3)
+                              T_J2ME(4:6,1:3)' T_J2ME(4:6,4:6)'];
+                    % geteph() returns MOON_ME, so rotate back
+                    xbase(:,k) = T_ME2J * temp(1:6);
+                end
+                % state error
+                dx = xeval - xbase;
+        
+                % compute coefficients for basis and generate model function
+                phi = (span').^(0:n-1);
+                F = pinv(phi);
+                G = F * dx(1:3,:)';
+                % basis = @(tau) [tau'.^(0:n) (0:n).*(tau'.^([0 0:n - 1])) * 2/dt];
+                % H = [G zeros(size(G)); zeros(size(G)) G];
+                fit.Cx = G(:,1)';
+                fit.Cy = G(:,2)';
+                fit.Cz = G(:,3)';
+    
+                % how to compute values: (basis(2*(tau)/dt - 1) * H)
+            end
+        end
+
+        function plot(obj,traj,frame)
             %PLOT Generates a plot of the provided satellite trajectories in
             %the specified frame.
             %   Input:
             %    - traj; Trajectory instance(s)
             %    - frame; reference frame to plot trajectories in
             arguments
+                obj     (1,1)   LunarPropagator
                 traj    (1,:)   Trajectory
                 frame   (1,:)   char
             end
@@ -214,8 +246,46 @@ classdef LunarPropagator < OrbitPropagator
             end
 
             % % not supported utility
-            % plotformat("APA", 1, "coloring", "science");
-            plotLunarOrbit(ts, data, frame, "Satellite trajectories");
+            figure();
+            plotformat("APA", 1);
+            % Display moon in trajectory plot
+            R = obj.pri.R;
+            [Imoon, ~] = imread("Moon_HermesCelestiaMotherlode.jpg");
+            [xx, yy, zz] = ellipsoid(0, 0, 0, R, R, R);
+            
+            % Rotate moon from MOON_ME frame to plot_frame
+            T = cspice_pxform('MOON_ME', frame, ts(end));
+            for j=1:size(xx,1)
+                for k=1:size(xx,2)
+                    % -z to flip image
+                    tmp = T * [xx(j,k); yy(j,k); -zz(j,k)];
+                    xx(j,k) = tmp(1); yy(j,k) = tmp(2); zz(j,k) = tmp(3);
+                end
+            end
+            
+            globe = surf(xx, yy, zz);
+            set(globe, 'FaceColor', 'texturemap', 'CData', Imoon, 'FaceAlpha', 1, ...
+                'EdgeColor', 'none');
+            hold on;
+            
+            % put a little star on the south pole
+            lsp = T * [0;0;-R];
+            scatter3(lsp(1), lsp(2), lsp(3), 100, "red", "filled", "pentagram");
+            
+            % plot user trajectory for same time frame
+            for k=1:size(data,3)
+                plot3(data(:,1,k), data(:,2,k), data(:,3,k), "LineWidth", 1.5, ...
+                    "Marker", "diamond", "MarkerIndices", length(ts));
+            end
+            
+            grid on; axis equal;
+            if strcmp(frame, 'J2000'), frame = 'ICRF'; end
+            SUB = strsplit(frame,"_");
+            SUB = SUB(end);
+            xlabel("x_{"+SUB+"} (km)");
+            ylabel("y_{"+SUB+"} (km)");
+            zlabel("z_{"+SUB+"} (km)");
+            title("Satellite trajectories");
         end
     end
 end

@@ -1,6 +1,6 @@
-classdef EKF < handle
-    %EKF Standard representation of a [discrete/hybrid] extended Kalman 
-    %filter with [discrete/continuous] dynamics and discrete measurements.
+classdef dsEKF < handle
+    %DSEKF Construction of a delayed-state extended Kalman filter with
+    %specified dynamics and discrete measurements.
     
     properties
         t      (1,:)   double               % simulation times
@@ -9,6 +9,7 @@ classdef EKF < handle
         y      (:,:)   double               % measurements
         R      (:,:,:) double               % measurement noise
         P      (:,:,:) double               % state covariance history
+        U      (:,:)   double               % measurement underweighting
         opts   (1,1)   struct               % ODE45 propagation options
         n      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of states
         m      (1,1)   {mustBeNonnegative, mustBeInteger} = 1   % # of steps in t_meas
@@ -18,13 +19,13 @@ classdef EKF < handle
     end
     
     methods
-        function obj = EKF(prop,meas,y,R,t_meas,options)
-            %EKF Construct an EKF instance (either discrete or hybrid).
+        function obj = dsEKF(prop,meas,y,R,t_meas,options)
+            %DSEKF Construct a dsEKF instance (either discrete or hybrid).
             %   Inputs:
-            %    - type; either "discrete" or "hybrid"
             %    - prop; dynamics propagator instance (inherits Propagator)
             %    - meas; measurement instance
             %    - y; measurements
+            %    - R; measurement covariance matrix
             %    - t_meas; time stamps where measurements are taken
             %    - t_sim; optional (if different from t_meas) name-value
             %             pair, time stamps to get state between measurements
@@ -41,7 +42,7 @@ classdef EKF < handle
 
             % check number of supplied measurements is correct
             if size(y,2) ~= length(t_meas)
-                error("EKF:measurementNum", ...
+                error("dsEKF:measurementNum", ...
                     "# of columns of y must equal length of t_meas.")
             end
 
@@ -66,7 +67,7 @@ classdef EKF < handle
             %    - x0; initial state
             %    - P0; initial state covariance
             arguments
-                obj
+                obj (1,1) dsEKF
                 x0  (:,1) double {mustBeNx1(obj,x0)}
                 P0  (:,:) double {mustBeNxN(obj,P0)}
             end
@@ -75,6 +76,9 @@ classdef EKF < handle
             obj.x(:,1)   = x0;
             obj.P(:,:,1) = P0;
             Ak_1 = obj.prop.partials(obj.t(1), x0);
+            tprev = obj.t(1);
+            xprev = obj.x(:,1);
+            Pprev = obj.P(:,:,1);
             
             for k=2:obj.s
                 tk = obj.t(k);
@@ -96,23 +100,36 @@ classdef EKF < handle
                     yj = obj.y(:,j);                % get state measurement
                     mask = ~isnan(yj);              % generate mask of any NaN
                     % get computed measurement from Measurement model
-                    ycomp = obj.meas.computemeas(tk, x_);
+                    ycomp = obj.meas.computemeas(tk,x_,tprev,xprev);
                     Y = yj - ycomp;                 % measurement residual (O - C)
                     Y = Y(mask);                    % mask out invalid meas
                     % measurement partials matrix
-                    H = obj.meas.measpartials(tk,x_);
+                    [H,J] = obj.meas.measpartials(tk,x_,tprev,xprev);
                     H = H(mask,:);                  % mask out invalid meas
+                    J = J(mask,:);
                     % get appropriate measurement noise
                     if size(obj.R, 3) > 1       % time-varying
-                        Rk = obj.R(mask,mask,j);
+                        Rk = obj.R(:,:,j);
                     else                        % time-invariant
-                        Rk = obj.R(mask,mask);
+                        Rk = obj.R(:,:);
                     end
+
+                    % underweight the pseudorange measurements
+                    ns = length(mask);
+                    Rk(mask(1:ns/3),mask(1:ns/3)) = Rk(mask(1:ns/3),mask(1:ns/3));
+                    Rk(mask(ns/3+1:end),mask(ns/+1:end)) = Rk(mask(ns/3+1:end),mask(ns/+1:end));
+                    Rk = Rk(mask,mask);
                     
-                    K = P_*H' / (H*P_*H' + Rk);     % Kalman gain
-                    obj.x(:,k) = x_ + K*Y;          % post-fit state estimate
                     % post-fit est. error covariance
-                    obj.P(:,:,k) = (eye(obj.n) - K*H)*P_*(eye(obj.n)-K*H)' + K*Rk*K';
+                    L = H*P_*H' + Rk + J*Pprev*Phi'*H' + H*Phi*Pprev*J' + J*Pprev*J';
+                    K = (P_*H' + Phi*Pprev*J') / L; % Kalman gain
+                    obj.x(:,k) = x_ + K*Y;          % post-fit state estimate
+                    obj.P(:,:,k) = P_ - K*L*K';
+
+                    % store states for next time
+                    tprev = tk;
+                    xprev = obj.x(:,k);
+                    Pprev = obj.P(:,:,k);
                 else                            % step without measurement
                     obj.x(:,k) = x_;
                     obj.P(:,:,k) = P_;

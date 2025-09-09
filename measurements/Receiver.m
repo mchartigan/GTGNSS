@@ -16,7 +16,7 @@ classdef Receiver < handle
 
         % code tracking loop characteristics %
         % code tracking loop order (first-, second-, or third-order)
-        codeorder   (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(codeorder,4)} = 2
+        codeorder   (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(codeorder,4)} = 1
         % is data present on signal? (i.e. does it have a nav msg or is it a 
         % pilot channel?) 1 - yes, 0 - no
         data        (1,1)   {mustBeNonnegative,mustBeInteger,mustBeLessThan(data,2)} = 1
@@ -33,30 +33,26 @@ classdef Receiver < handle
         D           (1,1)   double {mustBePositive} = 0.5
 
         % carrier tracking loop characteristics %
-        % carrier tracking loop type and order
-        carrier     (1,1)   string {mustBeCarrierLoop} = "none"
-        % second- or third-order for PLL, first- or second-order for FLL
-        carrierorder(1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(carrierorder,4)} = 2
+        % does receiver have a PLL carrier tracking loop
+        PLL         (1,1)   = false
+        % second- or third-order for PLL
+        PLLorder    (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(PLLorder,4)} = 2
+        % does receiver output the FLL tracking loop info
+        FLL         (1,1)   = false
+        % first- or second-order for FLL
+        FLLorder    (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(FLLorder,3)} = 1
         % 1 - high C/N0, 2 - near threshold (default high)
         F           (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(F,3)} = 1
         % Hz, carrier loop noise bandwidth (default moderate)
-        Bn_c        (1,1)   double {mustBePositive} = 2
+        % Bn_PLL <= 1/2/T_PLL for Nyquist stability
+        Bn_PLL        (1,1)   double {mustBePositive} = 2
+        Bn_FLL        (1,1)   double {mustBePositive} = 2
         % s, carrier predetection integration time; must be half of data
         % bit transition time so it can bet two samples to form the
         % discriminator; doesn't matter if data = 0 (default AFS-complaint)
-        T_c         (1,1)   double {mustBePositive} = 0.002
-        % s, phase measurement spacing to derive rate (default 0s). If Tm <
-        % T_c, then T_c is used to derive rate (like in the case of a FLL).
-        % If Tm > T_c, Tm is used; this is mainly for PLLs when you want a
-        % more accurate measurement because you have the full phase counts
-        % for that whole time. Similar techniques may be implementable for
-        % a FLL?
-        Tm          (1,1)   double {mustBeNonnegative} = 0
-    end
+        T_PLL         (1,1)   double {mustBePositive} = 0.002
+        T_FLL         (1,1)   double {mustBePositive} = 0.002
 
-    properties (Access = private)
-        % code tracking loop type, can only be DLL
-        code        (1,1)   string = "DLL"
     end
 
     properties (Constant)
@@ -65,7 +61,7 @@ classdef Receiver < handle
     end
 
     methods
-        function obj = Receiver(antenna,clock,carrierloop)
+        function obj = Receiver(antenna,clock,PLL,FLL)
             %RECEIVER Creates a Receiver instance. Specify at least the
             %carrier tracking loop type (or "none").
             %   Input:
@@ -76,7 +72,8 @@ classdef Receiver < handle
             if nargin ~= 0
                 obj.ant = antenna;
                 obj.clock = clock;
-                obj.carrier = carrierloop;
+                obj.PLL = PLL;
+                obj.FLL = FLL;
             end
         end
 
@@ -124,7 +121,7 @@ classdef Receiver < handle
             phi0 = y(2,1);
             for i=1:n-1
                 if isnan(y(2,i)) && ~isnan(y(2,i+1))
-                    phi0 = y(i+1);
+                    phi0 = y(2,i+1);
                 elseif ~isnan(y(2,i))
                     y(2,i) = y(2,i) - phi0;
                 end
@@ -140,73 +137,71 @@ classdef Receiver < handle
             var.total = zeros(3,n);
 
             % assign variance based on code tracking loop design
-            if strcmpi(obj.code, "DLL")         % delay lock loop
-                % assign thermal noise based on E-L correlator spacing
-                if obj.D >= pi*obj.Rc/obj.Bfe
-                    var.thermal(1,:) = obj.Bn./(2*CN0) .* obj.D .* ...
-                          (1 + obj.data*2./(obj.T*CN0*(2-obj.D)));
-                elseif obj.D > obj.Rc/obj.Bfe
-                    var.thermal(1,:) = obj.Bn./(2*CN0) .* ...
-                          (1/(obj.Bfe*Tc) + obj.Bfe*Tc/(pi-1)*(obj.D - (1/(obj.Bfe*Tc)))^2) .* ...
-                          (1 + obj.data*2./(obj.T*CN0*(2-obj.D)));
-                else
-                    var.thermal(1,:) = obj.Bn./(2*CN0) .* (1/(obj.Bfe*Tc)) .* ...
-                          (1 + obj.data*1./(obj.T*CN0));
-                end
-
-                % uncertainty from clock phase noise is zero
-                % add dynamic stress error if not carrier-aided
-                if strcmpi(obj.carrier, "none")
-                    switch obj.codeorder
-                        case 1
-                            w0 = 4 * obj.Bn;
-                            dyn = dT * obj.Rc;      % chips/s
-                        case 2
-                            w0 = obj.Bn / 0.53;
-                            dyn = ddT * obj.Rc;     % chips/s^2            
-                        case 3
-                            w0 = obj.Bn / 0.7845;
-                            dyn = dddT * obj.Rc;    % chips/s^3
-                        otherwise
-                            error("noise:invalidCodeOrder", ...
-                                "Supported code tracking loop orders are: 1, 2, 3.");
-                    end
-
-                    % DLL noise is thermal noise + dynamic stress, in chips^2 
-                    var.dyn(1,:) = (abs(dyn) / (3*w0^obj.codeorder)).^2;            
-                end
-
-                var.total(1,:) = var.thermal(1,:) + var.clk(1,:) + var.dyn(1,:);
-
-                % compute validity
-                track(1,:) = 3*sqrt(var.total(1,:)) <= obj.D / 2;
-                
-                % convert from chips^2 to s^2
-                var.thermal(1,:) = var.thermal(1,:) * Tc^2;
-                var.clk(1,:) = var.clk(1,:) * Tc^2;
-                var.dyn(1,:) = var.dyn(1,:) * Tc^2;
-                var.total(1,:) = var.total(1,:) * Tc^2;
-
+            % DELAY LOCK LOOP %
+            % assign thermal noise based on E-L correlator spacing
+            if obj.D >= pi*obj.Rc/obj.Bfe
+                var.thermal(1,:) = obj.Bn./(2*CN0) .* obj.D .* ...
+                      (1 + obj.data*2./(obj.T*CN0*(2-obj.D)));
+            elseif obj.D > obj.Rc/obj.Bfe
+                var.thermal(1,:) = obj.Bn./(2*CN0) .* ...
+                      (1/(obj.Bfe*Tc) + obj.Bfe*Tc/(pi-1)*(obj.D - (1/(obj.Bfe*Tc)))^2) .* ...
+                      (1 + obj.data*2./(obj.T*CN0*(2-obj.D)));
             else
-                error("noise:invalidCodeLoop", ...
-                    "Supported code tracking loops are: 'DLL'.");
+                var.thermal(1,:) = obj.Bn./(2*CN0) .* (1/(obj.Bfe*Tc)) .* ...
+                      (1 + obj.data*1./(obj.T*CN0));
             end
 
+            % uncertainty from clock phase noise is zero
+            % add dynamic stress error if not carrier-aided
+            if ~obj.PLL && ~obj.FLL
+                switch obj.codeorder
+                    case 1
+                        w0 = 4 * obj.Bn;
+                        dyn = dT / obj.c * obj.Rc;      % chips/s
+                    case 2
+                        w0 = obj.Bn / 0.53;
+                        dyn = ddT / obj.c * obj.Rc;     % chips/s^2            
+                    case 3
+                        w0 = obj.Bn / 0.7845;
+                        dyn = dddT / obj.c * obj.Rc;    % chips/s^3
+                    otherwise
+                        error("noise:invalidCodeOrder", ...
+                            "Supported code tracking loop orders are: 1, 2, 3.");
+                end
+
+                % DLL noise is thermal noise + dynamic stress, in chips^2 
+                var.dyn(1,:) = (abs(dyn) / (3*w0^obj.codeorder)).^2;            
+            end
+
+            var.total(1,:) = var.thermal(1,:) + var.clk(1,:) + var.dyn(1,:);
+
+            % compute validity
+            track(1,:) = 3*sqrt(var.total(1,:)) <= obj.D / 2;
+            
+            % convert from chips^2 to m^2
+            scale = Tc^2 * obj.c^2;
+            var.thermal(1,:) = var.thermal(1,:) * scale;
+            var.clk(1,:) = var.clk(1,:) * scale;
+            var.dyn(1,:) = var.dyn(1,:) * scale;
+            var.total(1,:) = var.total(1,:) * scale;
+
+
             % assign variance based on carrier tracking loop design
-            if strcmpi(obj.carrier, "PLL")      % phase lock loop
+            % PHASE LOCKED LOOP %
+            if obj.PLL
                 % thermal noise, rad
-                var.thermal(2,:) = obj.Bn_c./CN0 .* (1 + obj.data*1./(obj.T_c*CN0));
+                var.thermal(2,:) = obj.Bn_PLL./CN0 .* (1 + obj.data*1./(obj.T_PLL*CN0));
 
                 % add dynamic stress
-                switch obj.carrierorder
+                switch obj.PLLorder
                     case 2
-                        w0 = obj.Bn_c / 0.53;
-                        dyn = ddT*obj.freq*2*pi;    % rad/s^2
+                        w0 = obj.Bn_PLL / 0.53;
+                        dyn = ddT / obj.c * obj.freq * 2*pi;    % rad/s^2
                         coef = 2.5;
 
                     case 3
-                        w0 = obj.Bn_c / 0.7845;
-                        dyn = dddT*obj.freq*2*pi;   % rad/s^3
+                        w0 = obj.Bn_PLL / 0.7845;
+                        dyn = dddT / obj.c * obj.freq * 2*pi;   % rad/s^3
                         coef = 2.25;
                         
                     otherwise
@@ -215,34 +210,38 @@ classdef Receiver < handle
                 end
 
                 % add oscillator phase noise, rad^2
-                var.clk(2,:) = (2*pi/coef/obj.Bn_c * obj.freq)^2 * ...
-                           obj.clock.stability(1/obj.Bn_c) * ones(1,size(var.thermal,2));
+                var.clk(2,:) = (2*pi/coef/obj.Bn_PLL * obj.freq)^2 * ...
+                    obj.clock.stability(1/obj.Bn_PLL) / obj.clock.norm^2 * ...
+                    ones(1,size(var.thermal,2));
                 % add dynamic stress error
-                var.dyn(2,:) = (abs(dyn) / (3*w0^obj.carrierorder)).^2;
+                var.dyn(2,:) = (abs(dyn) / (3*w0^obj.PLLorder)).^2;
                 var.total(2,:) = var.thermal(2,:) + var.clk(2,:) + var.dyn(2,:);
 
                 % compute validity (assume ATAN2 discriminator)
                 track(2,:) = 3*sqrt(var.total(2,:)) <= 2*pi / (4*(1+obj.data));
 
-                % convert from rad^2 to s^2
-                var.thermal(2,:) = var.thermal(2,:) * (2*pi*obj.freq)^(-2);
-                var.clk(2,:) = var.clk(2,:) * (2*pi*obj.freq)^(-2);
-                var.dyn(2,:) = var.dyn(2,:) * (2*pi*obj.freq)^(-2);
-                var.total(2,:) = var.total(2,:) * (2*pi*obj.freq)^(-2);
+                % convert from rad^2 to m^2
+                scale = (2*pi*obj.freq)^(-2) * obj.c^2;
+                var.thermal(2,:) = var.thermal(2,:) * scale;
+                var.clk(2,:) = var.clk(2,:) * scale;
+                var.dyn(2,:) = var.dyn(2,:) * scale;
+                var.total(2,:) = var.total(2,:) * scale;
+            end
                 
-            elseif strcmpi(obj.carrier, "FLL")  % frequency lock loop
+            % FREQUENCY LOCKED LOOP %
+            if obj.FLL
                 % thermal noise, Hz
-                var.thermal(3,:) = 1/(2*pi*obj.T_c)^2 * ...
-                       (4*obj.F*obj.Bn_c./CN0 .* (1 + obj.data./(obj.T_c*CN0)));
+                var.thermal(3,:) = 1/(2*pi*obj.T_FLL)^2 * ...
+                       (4*obj.F*obj.Bn_FLL./CN0 .* (1 + obj.data./(obj.T_FLL*CN0)));
 
                 % add dynamic stress, Hz
-                switch obj.carrierorder
+                switch obj.FLLorder
                     case 1
-                        w0 = 4 * obj.Bn_c;
-                        dyn = ddT*obj.freq;     % cycles/s^2
+                        w0 = 4 * obj.Bn_FLL;
+                        dyn = ddT / obj.c * obj.freq;   % cycles/s^2
                     case 2
-                        w0 = obj.Bn_c / 0.53;
-                        dyn = dddT*obj.freq;    % cycles/s^3
+                        w0 = obj.Bn_FLL / 0.53;
+                        dyn = dddT / obj.c * obj.freq;  % cycles/s^3
                     otherwise
                         error("noise:invalidCarrierOrder", ...
                             "Supported FLL loop orders are: 1, 2.");
@@ -251,22 +250,18 @@ classdef Receiver < handle
                 % uncertainty from clock phase noise is zero
                 % FLL has one more integrator, so dynamic stress is proportional
                 % to d^(n+1)R/dt^(n+1)
-                var.dyn(3,:) = (abs(dyn) / (3*w0^obj.carrierorder)).^2;
+                var.dyn(3,:) = (abs(dyn) / (3*w0^obj.FLLorder)).^2;
                 var.total(3,:) = var.thermal(3,:) + var.clk(3,:) + var.dyn(3,:);
 
                 % compute validity (assume ATAN2 discriminator)
-                track(3,:) = 3*sqrt(var.total(3,:)) <= 1 / (4*obj.T_c);
+                track(3,:) = 3*sqrt(var.total(3,:)) <= 1 / (4*obj.T_FLL);
 
-                % convert from Hz^2 to (s/s)^2
-                var.thermal(3,:) = var.thermal(3,:) * obj.freq^(-2);
-                var.clk(3,:) = var.clk(3,:) * obj.freq^(-2);
-                var.dyn(3,:) = var.dyn(3,:) * obj.freq^(-2);
-                var.total(3,:) = var.total(3,:) * obj.freq^(-2);
-
-            elseif ~strcmpi(obj.carrier, "none")
-                % loop isn't none (no carrier tracking)
-                error("linkbudget:invalidCarrierLoop", ...
-                    "Supported carrier tracking loops are: 'PLL', 'FLL', 'none'.");
+                % convert from Hz^2 to (m/s)^2
+                scale = obj.freq^(-2) * obj.c^2;
+                var.thermal(3,:) = var.thermal(3,:) * scale;
+                var.clk(3,:) = var.clk(3,:) * scale;
+                var.dyn(3,:) = var.dyn(3,:) * scale;
+                var.total(3,:) = var.total(3,:) * scale;
             end
 
             % generate noise based on var
@@ -275,9 +270,10 @@ classdef Receiver < handle
                 err(ind,i) = mvnrnd(zeros(1,sum(ind)), diag(var.total(ind,i)))';
             end
             % apply noise to measurements
-            y = y + err;
+            % y = y + err;
             % mask out invalid measurements
             y(~track) = NaN;
+            var.total(~track) = NaN;
         end
 
         function CN0 = rxlinkbudget(obj,AP)
