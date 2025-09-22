@@ -15,7 +15,7 @@ classdef NavSatellite < handle
         % nav message update cadence info
         cadence (1,1)   double {mustBeNonnegative}
         % nav message coefficient count (per axis, so will be 3x)
-        ncoef   (1,1)   {mustBeNonnegative,mustBeInteger} = 10
+        ncoef   (1,1)   {mustBeNonnegative,mustBeInteger} = 6
         % reference state info (avoids recalling runto() on prop and clock
         % if data has already been requested before
         tr      (1,:)   double = []
@@ -297,12 +297,12 @@ classdef NavSatellite < handle
             end
 
             % work group delays (calibration error, not evolving over time)
-            var.group(1,:) = 0.1^2;
+            var.group(1,:) = 0; %0.1^2;
             err.group(1,:) = mvnrnd(0, var.group(1,1));
             % phase noise and frequency stability (already in error but not
             % variance budget)
-            var.phase(1,:) = (1e-4)^2;
-            var.phase(2,:) = (4.3e-5)^2;
+            var.phase(1,:) = 0; %(1e-4)^2;
+            var.phase(2,:) = 0; %(4.3e-5)^2;
 
             % Apply only the errors that will occur due to signal
             % transmission. We're making this realistic here!

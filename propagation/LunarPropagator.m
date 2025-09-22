@@ -210,11 +210,11 @@ classdef LunarPropagator < OrbitPropagator
                 dx = xeval - xbase;
         
                 % compute coefficients for basis and generate model function
-                phi = (span').^(0:n-1);
-                F = pinv(phi);
-                G = F * dx(1:3,:)';
-                % basis = @(tau) [tau'.^(0:n) (0:n).*(tau'.^([0 0:n - 1])) * 2/dt];
-                % H = [G zeros(size(G)); zeros(size(G)) G];
+                % % polynomial basis
+                % phi = (span').^(0:n-1);
+                % chebyshev basis
+                phi = chebyshev(0:n-1, span);
+                G = pinv(phi) * dx(1:3,:)';
                 fit.Cx = G(:,1)';
                 fit.Cy = G(:,2)';
                 fit.Cz = G(:,3)';

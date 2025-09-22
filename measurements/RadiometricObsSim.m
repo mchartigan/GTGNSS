@@ -62,10 +62,12 @@
             obj.msgs = [];
             var = cell(obj.nsats,1);
             R = zeros(3*obj.nsats,3*obj.nsats,n);
+            CN0 = zeros(obj.nsats,n);
 
             for i=1:obj.nsats
                 % FIELD INCOMING MEASUREMENTS -- y_raw(ts) %
                 [T,dT,AP,msg,~,var1] = obj.sats(i).transmitsignal(ts, obj.user);
+                CN0(i,:) = obj.user.rx.rxlinkbudget(AP);
                 [y_raw,~,var2] = obj.user.rx.tracksat(ts, T, dT, AP);
                 obj.msgs = [obj.msgs; msg];
 
@@ -117,6 +119,25 @@
                     R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:);
                 end
             end
+
+            % plot CN0
+            tplot = (ts - ts(1)) / 60;
+            figure();
+            plotformat("APA", 0.5);
+            for i=1:obj.nsats
+                valid = CN0(i,:) > 0;
+                plot(tplot(valid), CN0(i,valid), LineWidth=1.5);
+                if i==1, hold on; end
+            end
+            hold off; grid on;
+            axis([tplot(1) tplot(end) 35 50]);
+            ax = xticklabels;
+            xticklabels(flip(ax));
+            linestyleorder("mixedstyles")
+            xlabel("Time (mins)");
+            ylabel("C/N0 (dB-Hz)");
+            title("Receiver CN0 for each LDN link");
+            legend(["LDN-1", "LDN-2", "LDN-3", "LDN-4", "LDN-5"], location="best");
         end
 
         function [y,xs] = computemeas(obj,tr,x,tprev,xprev)
@@ -468,8 +489,16 @@
                 Cz = msg(24+2*NC:end);
                 G = [Cx; Cy; Cz];
                 tau = 2*(tau)/VP - 1;
-                x(1:3) = x(1:3) + G * (tau.^(0:NC-1))';
-                x(4:6) = x(4:6) + G * ((0:NC-1).*(tau.^([0 0:NC-2])) * 2/VP)';
+                % % standard polynomial model (plus derivative)
+                % Phi = (tau.^(0:NC-1))';
+                % dPhi = ((0:NC-1).*(tau.^([0 0:NC-2])) * 2/VP)';
+                % chebyshev basis
+                Phi = chebyshev(0:NC-1,tau)';
+                dPhi = 2*(0:NC-1)'/VP .* chebyshev([0 0:NC-2], tau, 2)';
+
+                % compute differential offsets
+                x(1:3) = x(1:3) + G * Phi;
+                x(4:6) = x(4:6) + G * dPhi;
             end
 
             % apply transformation
