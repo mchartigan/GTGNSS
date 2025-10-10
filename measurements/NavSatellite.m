@@ -32,6 +32,8 @@ classdef NavSatellite < handle
         ID      (1,1)   {mustBeInteger,mustBeNonnegative}
         % should debug info be printed?
         DEBUG   (1,1)
+        % various constant error variances
+        group   (1,1)   double {mustBeNonnegative} = 0.1^2  % m^2
     end
 
     properties (Access = private)
@@ -183,7 +185,7 @@ classdef NavSatellite < handle
             end
         end
 
-        function [err,var,msg,los] = getSISE(obj,tt,ts,user)
+        function [err,var,msg,los,bias] = getSISE(obj,tt,ts,user)
             %GETSISE Return the signal in space error for the satellite to
             %the given user.
             %   SISE Position: 13.43 m 3-sigma
@@ -229,7 +231,6 @@ classdef NavSatellite < handle
             xmdl = zeros(9,n);
 
             % compute errors and variances
-            Pprop = Pprop - Pnav;           % separate errors from initial est. and propagation
             err.eph_prop = zeros(2,n);      % error due to initial OD and propagation
             err.eph_mdl  = zeros(2,n);      % error due to ephemeris parameterization
             err.clk_prop = zeros(2,n);      % error due to clock est. and propagation
@@ -241,6 +242,7 @@ classdef NavSatellite < handle
             var.clk_mdl  = zeros(2,n);      % variance of clock parameterization
             var.group    = zeros(2,n);      % variance of group delay calibration error
             var.phase    = zeros(2,n);      % variance due to clock phase noise
+            var.ODTS     = zeros(2,n);      % variance of initial ODTS
 
             % iterate over update times
             for i=1:length(tmsg)-1
@@ -248,7 +250,7 @@ classdef NavSatellite < handle
                 % should cover all tt
                 jj = and(tt > tmsg(i), tt < tmsg(i+1));
                 % % store nav uncertainty
-                % Pnav(:,:,jj) = repmat(Pmsg(:,:,i), 1, 1, length(jj));
+                Pnav(:,:,jj) = repmat(Pmsg(:,:,i), 1, 1, sum(jj));
                 % propagate states over given times. tmsg(i) provided so
                 % trajectory starts at appropriate time
                 tsub = [tmsg(i) tmsg(i+1)];
@@ -288,6 +290,9 @@ classdef NavSatellite < handle
                         var.eph_prop(1,k) = los(:,k)' * Pprop(1:3,1:3,k) * los(:,k); % / obj.c_km2;
                         var.eph_prop(2,k) = los(:,k)' * Pprop(4:6,4:6,k) * los(:,k); % / obj.c_km2;
                         var.clk_prop(:,k) = diag(Pprop(7:8,7:8,k));
+                        % " from ODTS
+                        var.ODTS(1,k) = los(:,k)' * Pnav(1:3,1:3,k) * los(:,k) + Pnav(7,7,k);
+                        var.ODTS(2,k) = los(:,k)' * Pnav(4:6,4:6,k) * los(:,k) + Pnav(8,8,k);
                     end
     
                     % " from parameterization (computed in batch)
@@ -297,12 +302,21 @@ classdef NavSatellite < handle
             end
 
             % work group delays (calibration error, not evolving over time)
-            var.group(1,:) = 0; %0.1^2;
-            err.group(1,:) = mvnrnd(0, var.group(1,1));
+            var.group(1,:) = obj.group;
+            err.group(1,:) = mvnrnd(0, obj.group);
             % phase noise and frequency stability (already in error but not
             % variance budget)
-            var.phase(1,:) = 0; %(1e-4)^2;
-            var.phase(2,:) = 0; %(4.3e-5)^2;
+            % get loop bandwidth
+            if user.rx.PLL, Bn = user.rx.Bn_PLL;
+            elseif user.rx.FLL, Bn = user.rx.Bn_FLL;
+            else, Bn = user.rx.Bn;
+            end
+            % jitter, in rad^2
+            [~,var.phase(1,:)] = obj.prop.clock.getjitter(user.rx.freq,Bn);
+            % convert to m^2
+            var.phase(1,:) = var.phase(1,:) * (2*pi*user.rx.freq)^(-2) * obj.c^2;
+            % (s/s)^2 to (m/s)^2
+            var.phase(2,:) = obj.prop.clock.stability(user.rx.T_FLL) * obj.c^2;
 
             % Apply only the errors that will occur due to signal
             % transmission. We're making this realistic here!

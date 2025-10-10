@@ -270,7 +270,7 @@ classdef Receiver < handle
                 err(ind,i) = mvnrnd(zeros(1,sum(ind)), diag(var.total(ind,i)))';
             end
             % apply noise to measurements
-            % y = y + err;
+            y = y + err;
             % mask out invalid measurements
             y(~track) = NaN;
             var.total(~track) = NaN;

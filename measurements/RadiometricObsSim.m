@@ -19,6 +19,8 @@
         msgs    (:,:)   double
         % reference frame of measurements (for geteph())
         frame   (1,:)   {mustBeText} = 'MOON_ME'
+        % is bias estimation implemented? (changes # of states)
+        biasEst (1,1)   logical
     end
 
     properties (Constant)
@@ -30,19 +32,25 @@
     end
 
     methods
-        function obj = RadiometricObsSim(sats,user)
+        function obj = RadiometricObsSim(sats,user,options)
             %RADIOMETRICOBSSIM Construct a RadiometricObsSim instance.
             %   Input:
             %    - sats; row vector of NavSatellite instances comprising
             %       constellation
             %    - user; User instance detailing their receiver,
             %       trajectory, etc.
+            arguments
+                sats    (1,:)   NavSatellite
+                user    (1,1)   User
+                options.biasEst (1,1)   logical = 0
+            end
 
             obj.sats = sats;
             obj.nsats = length(sats);
             obj.user = user;
             obj.m = 1 + user.rx.PLL + user.rx.FLL;
-            obj.dim = obj.nsats * obj.m;
+            obj.dim = 3 * obj.nsats;
+            obj.biasEst = options.biasEst;
         end
 
         function [y,R,var] = getmeas(obj,ts)
@@ -61,7 +69,7 @@
             x_user = obj.user.getstates(ts, obj.frame);
             obj.msgs = [];
             var = cell(obj.nsats,1);
-            R = zeros(3*obj.nsats,3*obj.nsats,n);
+            R = zeros(obj.dim,obj.dim,n);
             CN0 = zeros(obj.nsats,n);
 
             for i=1:obj.nsats
@@ -103,8 +111,12 @@
                 % All the while adding the user clock bias and drift
                 % m, pseudorange
                 y(i,:) = y_raw(1,:) + x_user(7,:);
-                % Measurement underweighting?
-                R(i,i,:) = var1.total(1,:);
+                % if estimating measurement bias, remove bias 
+                if ~obj.biasEst
+                    R(i,i,:) = var1.total(1,:);
+                else
+                    R(i,i,:) = var1.total(1,:) - var1.ODTS(1,:);
+                end
                 % m, delta-pseudorange
                 if obj.user.rx.PLL
                     y(i+obj.nsats,:) = y_raw(2,:) + x_user(7,:);
@@ -120,24 +132,24 @@
                 end
             end
 
-            % plot CN0
-            tplot = (ts - ts(1)) / 60;
-            figure();
-            plotformat("APA", 0.5);
-            for i=1:obj.nsats
-                valid = CN0(i,:) > 0;
-                plot(tplot(valid), CN0(i,valid), LineWidth=1.5);
-                if i==1, hold on; end
-            end
-            hold off; grid on;
-            axis([tplot(1) tplot(end) 35 50]);
-            ax = xticklabels;
-            xticklabels(flip(ax));
-            linestyleorder("mixedstyles")
-            xlabel("Time (mins)");
-            ylabel("C/N0 (dB-Hz)");
-            title("Receiver CN0 for each LDN link");
-            legend(["LDN-1", "LDN-2", "LDN-3", "LDN-4", "LDN-5"], location="best");
+            % % plot CN0
+            % tplot = (ts - ts(1)) / 60;
+            % figure();
+            % plotformat("APA", 0.5);
+            % for i=1:obj.nsats
+            %     valid = CN0(i,:) > 0;
+            %     plot(tplot(valid), CN0(i,valid), LineWidth=1.5);
+            %     if i==1, hold on; end
+            % end
+            % hold off; grid on;
+            % axis([tplot(1) tplot(end) 35 50]);
+            % ax = xticklabels;
+            % xticklabels(flip(ax));
+            % linestyleorder("mixedstyles")
+            % xlabel("Time (mins)");
+            % ylabel("C/N0 (dB-Hz)");
+            % title("Receiver CN0 for each LDN link");
+            % legend(["LDN-1", "LDN-2", "LDN-3", "LDN-4", "LDN-5"], location="best");
         end
 
         function [y,xs] = computemeas(obj,tr,x,tprev,xprev)
@@ -146,26 +158,26 @@
             %   Input:
             %    - tr; measurement time (or user's best estimate thereof),
             %       seconds past J2000
-            %    - x; (best est. of) state of USER at time t in MOON_ME
+            %    - x; (best est. of) state of SAT at time t in MOON_ME
             %       [pos (km); vel (km/s); t bias (s); drift (s/s); rate (s/s^2)]
             arguments
                 obj     (1,1)   RadiometricObsSim
                 tr      (1,1)   double
-                x       (9,:)   double
+                x       (:,:)   double
                 tprev   (1,1)   double = NaN
-                xprev   (9,:)   double = zeros(9,1)
+                xprev   (:,:)   double = zeros(9,1)
             end
 
             r_u = x(1:3);           % user position
             v_u = x(4:6);           % user velocity
 
-            y = nan(3*obj.nsats,1);
+            y = nan(obj.dim,1);
             xs = zeros(9,obj.nsats);
 
             for i=1:obj.nsats
                 % find transmission time w.r.t meas, based on nav msg knowledge
                 % of satellite states
-                tt = obj.timeofflight(tr,x,obj.sats(i).ID,obj.msgs);
+                tt = obj.timeofflight(tr,x(1:9),obj.sats(i).ID,obj.msgs);
                 [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
                 % rotate to inertial if that's how we're managing things
                 if strcmp(obj.frame, 'J2000')
@@ -185,10 +197,14 @@
 
                 % m, pseudorange (DLL)
                 y(i) = rho + x(7) - x_s(7);
-                % m/s, Doppler
+                % measurement bias
+                if obj.biasEst, y(i) = y(i) + x(9+i); end
+
+                % m/s, Doppler (FLL)
                 if obj.user.rx.FLL
                     y(i + 2*obj.nsats) = dvdr/rho + x(8) - x_s(8);
                 end
+
                 % m, pseudorange (PLL)
                 if obj.user.rx.PLL && ~isnan(tprev)
                     y(i + obj.nsats) = rho + x(7) - x_s(7);
@@ -196,7 +212,7 @@
                     % compute previous pseudorange and difference them
                     % find transmission time w.r.t meas, based on nav msg knowledge
                     % of satellite states
-                    tt = obj.timeofflight(tprev,xprev,obj.sats(i).ID,obj.msgs);
+                    tt = obj.timeofflight(tprev,xprev(1:9),obj.sats(i).ID,obj.msgs);
                     [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
                     % rotate to inertial if that's how we're managing things
                     if strcmp(obj.frame, 'J2000')
@@ -209,6 +225,10 @@
                     rho = norm(dr);                 % scalar range
                     % change it to delta-pseudorange
                     y(i+obj.nsats) = y(i+obj.nsats) - (rho + xprev(7) - x_s(7));
+                    % account for measurement bias estimation
+                    if obj.biasEst
+                        y(i+obj.nsats) = y(i+obj.nsats) + x(9+i) - xprev(9+i);
+                    end
                 end
             end
         end
@@ -224,21 +244,21 @@
             arguments
                 obj     (1,1)   RadiometricObsSim
                 tr      (1,:)   double
-                x       (9,:)   double
+                x       (:,:)   double
                 tprev   (1,1)   double = NaN
-                xprev   (9,:)   double = zeros(9,1)
+                xprev   (:,:)   double = zeros(9,1)
             end
 
             r_u = x(1:3);           % user position
             v_u = x(4:6);           % user velocity
 
-            H = zeros(3*obj.nsats,9);
-            J = zeros(3*obj.nsats,9);
+            H = zeros(3*obj.nsats,9+obj.biasEst*obj.nsats);
+            J = zeros(3*obj.nsats,9+obj.biasEst*obj.nsats);
 
             for i=1:obj.nsats
                 % find transmission time w.r.t meas, based on nav msg knowledge
                 % of satellite states
-                tt = obj.timeofflight(tr,x,obj.sats(i).ID,obj.msgs);
+                tt = obj.timeofflight(tr,x(1:9),obj.sats(i).ID,obj.msgs);
                 [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
                 % rotate to inertial if that's how we're managing things
                 if strcmp(obj.frame, 'J2000')
@@ -256,19 +276,22 @@
                 dvdr = dv'*dr;          % dot product of dv and dr
 
                 % m, pseudorange (DLL)
-                H(i,:) = [-dr'/rho 0 0 0 1 0 0];
-                % m/s, Doppler
+                H(i,1:9) = [-dr'/rho 0 0 0 1 0 0];
+                % partial of bias
+                if obj.biasEst, H(i,9+i) = 1; end
+
+                % m/s, Doppler (FLL)
                 if obj.user.rx.FLL
-                    H(i + 2*obj.nsats,:) = ...
+                    H(i + 2*obj.nsats,1:9) = ...
                         [(dr'*dvdr/rho^3 - dv'/rho) -dr'/rho 0 1 0];
                 end
                 % m, pseudorange (PLL)
                 if obj.user.rx.PLL && ~isnan(tprev)
-                    H(i + obj.nsats,:) = [-dr'/rho 0 0 0 1 0 0];
+                    H(i + obj.nsats,1:9) = [-dr'/rho 0 0 0 1 0 0];
 
                     % find transmission time w.r.t meas, based on nav msg knowledge
                     % of satellite states
-                    tt = obj.timeofflight(tprev,xprev,obj.sats(i).ID,obj.msgs);
+                    tt = obj.timeofflight(tprev,xprev(1:9),obj.sats(i).ID,obj.msgs);
                     [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
                     % rotate to inertial if that's how we're managing things
                     if strcmp(obj.frame, 'J2000')
@@ -281,7 +304,13 @@
                     rho = norm(dr);                 % scalar range
 
                     % find second measurement matrix
-                    J(i + obj.nsats,:) = -[-dr'/rho 0 0 0 1 0 0];
+                    J(i + obj.nsats,1:9) = -[-dr'/rho 0 0 0 1 0 0];
+
+                    % partial of biases
+                    if obj.biasEst
+                        H(i+obj.nsats,9+i) = 1;
+                        J(i+obj.nsats,9+i) = -1;
+                    end
                 end
             end
         end
@@ -336,7 +365,7 @@
             end
         end
 
-        function ploterror(obj,t,yobs,ycomp,var)
+        function ploterror(obj,t,yobs,ycomp,R)
             %PLOTERROR Plots psuedorange, delta-pseudorange, and/or Doppler
             %error over time -- along with the corresponding variance.
             %   Measurement model is
@@ -352,7 +381,7 @@
                 t       (1,:)   double
                 yobs    (:,:)   double
                 ycomp   (:,:)   double
-                var     (1,1)   struct
+                R       (:,:,:) double
             end
 
             % get plotting timescale and units
@@ -369,8 +398,14 @@
                 units = "(days)";
             end
 
+            % reformat covariance
+            Rdiag = zeros(size(R,1),size(R,3));
+            for i=1:length(t)
+                Rdiag(:,i) = diag(R(:,:,i));
+            end
+
             figure();
-            plotformat("APA", 0.25*obj.m + 0.25, "coloring", "greyscale");
+            plotformat("APA", 0.25*obj.m + 0.25, color="greyscale");
             colors = colororder;
             tiledlayout(obj.m,1);
 
@@ -379,7 +414,7 @@
             mask = ~isnan(yobs(1,:));
             dt = t(mask);
             p_err = yobs(1,mask) - ycomp(1,mask);
-            p_std = 3 * sqrt(var.total(1,mask));
+            p_std = 3 * sqrt(Rdiag(1,mask));
             plot(dt, p_err);
             hold on;
             patch([dt flip(dt)], [-p_std flip(p_std)], colors(2,:), ...
@@ -395,7 +430,7 @@
                 mask = ~isnan(yobs(2,:));
                 dt = t(mask);
                 dp_err = yobs(2,mask) - ycomp(2,mask);
-                dp_std = 3 * sqrt(var.total(2,mask));
+                dp_std = 3 * sqrt(Rdiag(2,mask));
                 msgbound = abs(dp_err) > 0.1;
                 dp_err(msgbound) = [];
                 dp_std(msgbound) = [];
@@ -416,7 +451,7 @@
                 mask = ~isnan(yobs(3,:));
                 dt = t(mask);
                 f_err = yobs(3,mask) - ycomp(3,mask);
-                f_std = 3 * sqrt(var.total(3,mask));
+                f_std = 3 * sqrt(Rdiag(3,mask));
                 plot(dt, f_err);
                 hold on;
                 patch([dt flip(dt)], [-f_std flip(f_std)], colors(2,:), ...

@@ -48,9 +48,9 @@ classdef Clock < Propagator
         % s/s, stability (standard deviations) from Hadamard deviations
         s_had       (:,1)   double {mustBeNonnegative} = []
         % Hz, phase noise frequency offsets
-        f_noise     (:,1)   double {mustBePositive} = []
+        f_noise     (1,:)   double {mustBePositive} = []
         % dBc/Hz, phase noise
-        n_noise     (:,1)   double = []
+        n_noise     (1,:)   double = []
     end
     properties (Constant)
         c   = 299792458;    % m/s, speed of light
