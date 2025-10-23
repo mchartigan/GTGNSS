@@ -99,6 +99,10 @@ classdef dsEKF < handle
                 
                     yj = obj.y(:,j);                % get state measurement
                     mask = ~isnan(yj);              % generate mask of any NaN
+
+                    if k == 622
+                        0;
+                    end
                     % get computed measurement from Measurement model
                     ycomp = obj.meas.computemeas(tk,x_,tprev,xprev);
                     Y = yj - ycomp;                 % measurement residual (O - C)
@@ -115,9 +119,9 @@ classdef dsEKF < handle
                     end
 
                     % underweight the pseudorange measurements
-                    ns = length(mask);
-                    Rk(mask(1:ns/3),mask(1:ns/3)) = Rk(mask(1:ns/3),mask(1:ns/3));
-                    Rk(mask(ns/3+1:end),mask(ns/+1:end)) = Rk(mask(ns/3+1:end),mask(ns/+1:end));
+                    % ns = length(mask);
+                    % Rk(mask(1:ns/3),mask(1:ns/3)) = Rk(mask(1:ns/3),mask(1:ns/3));
+                    % Rk(mask(ns/3+1:end),mask(ns/+1:end)) = Rk(mask(ns/3+1:end),mask(ns/+1:end));
                     Rk = Rk(mask,mask);
                     
                     % post-fit est. error covariance

@@ -171,10 +171,6 @@ classdef SatellitePropagator < Propagator
             A = zeros(obj.dim, obj.dim);
             A(1:6,1:6) = obj.orbit.numpart(t,x(1:6));
             A(7:9,7:9) = obj.clock.partials(t,x(7:9));
-            
-            if obj.bias
-                A(10:9+obj.bias,10:9+obj.bias) = eye(obj.bias);
-            end
         end
 
         function P = proplyapunov(obj,ts,x0,P0)
