@@ -206,7 +206,7 @@ classdef SatellitePropagator < Propagator
             Q(7:9,7:9) = obj.clock.noise(dt);
 
             if obj.bias
-                Q(10:9+obj.bias,10:9+obj.bias) = diag(obj.biasnoise);
+                Q(10:9+obj.bias,10:9+obj.bias) = diag(obj.biasnoise) * dt;
             end
 
             Q = Q * obj.scale;

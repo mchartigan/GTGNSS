@@ -203,6 +203,12 @@
                 % m/s, Doppler (FLL)
                 if obj.user.rx.FLL
                     y(i + 2*obj.nsats) = dvdr/rho + x(8) - x_s(8);
+
+                    % add bias velocity approximation
+                    if obj.biasEst && ~isnan(tprev)
+                        y(i+2*obj.nsats) = y(i+2*obj.nsats) + ...
+                            (x(9+i) - xprev(9+i)) / (tr - tprev);
+                    end
                 end
 
                 % m, pseudorange (PLL)
@@ -284,6 +290,13 @@
                 if obj.user.rx.FLL
                     H(i + 2*obj.nsats,1:9) = ...
                         [(dr'*dvdr/rho^3 - dv'/rho) -dr'/rho 0 1 0];
+
+                    % add bias velocity approximation
+                    if obj.biasEst && ~isnan(tprev)
+                        dt = tr - tprev;
+                        H(i+2*obj.nsats,9+i) = 1/dt;
+                        J(i+2*obj.nsats,9+i) = -1/dt;
+                    end
                 end
                 % m, pseudorange (PLL)
                 if obj.user.rx.PLL && ~isnan(tprev)
