@@ -80,6 +80,8 @@ classdef dsEKF < handle
             xprev = obj.x(:,1);
             Pprev = obj.P(:,:,1);
             
+            fprintf("  1     2     3     4     5\n");
+
             for k=2:obj.s
                 tk = obj.t(k);
                 dt = tk - obj.t(k-1);
@@ -134,6 +136,15 @@ classdef dsEKF < handle
                     tprev = tk;
                     xprev = obj.x(:,k);
                     Pprev = obj.P(:,:,k);
+
+                    fprintf(" x: %5.1f %5.1f %5.1f %5.1f %5.1f\n", xprev(10), ...
+                        xprev(11), xprev(12), xprev(13), xprev(14));
+                    fprintf(" P: %5.1f %5.1f %5.1f %5.1f %5.1f\n", Pprev(10,10), ...
+                        Pprev(11,11), Pprev(12,12), Pprev(13,13), Pprev(14,14));
+                    fprintf("dx: %5.1f %5.1f %5.1f %5.1f %5.1f\n", xprev(15), ...
+                        xprev(16), xprev(17), xprev(18), xprev(19));
+                    fprintf("dP: %5.1f %5.1f %5.1f %5.1f %5.1f\n", Pprev(15,15), ...
+                        Pprev(16,16), Pprev(17,17), Pprev(18,18), Pprev(19,19));
                 else                            % step without measurement
                     obj.x(:,k) = x_;
                     obj.P(:,:,k) = P_;

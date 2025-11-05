@@ -128,7 +128,12 @@
                 % m/s, Doppler
                 if obj.user.rx.FLL
                     y(i+2*obj.nsats,:) = y_raw(3,:) + x_user(8,:);
-                    R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:);
+
+                    if ~obj.biasEst
+                        R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:);
+                    else
+                        R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:) - var1.ODTS(3,:);
+                    end
                 end
             end
 
@@ -204,11 +209,7 @@
                 if obj.user.rx.FLL
                     y(i + 2*obj.nsats) = dvdr/rho + x(8) - x_s(8);
 
-                    % add bias velocity approximation
-                    if obj.biasEst && ~isnan(tprev)
-                        y(i+2*obj.nsats) = y(i+2*obj.nsats) + ...
-                            (x(9+i) - xprev(9+i)) / (tr - tprev);
-                    end
+                    y(i+2*obj.nsats) = y(i+2*obj.nsats) + x(9+obj.nsats+i);
                 end
 
                 % m, pseudorange (PLL)
@@ -258,8 +259,8 @@
             r_u = x(1:3);           % user position
             v_u = x(4:6);           % user velocity
 
-            H = zeros(3*obj.nsats,9+obj.biasEst*obj.nsats);
-            J = zeros(3*obj.nsats,9+obj.biasEst*obj.nsats);
+            H = zeros(3*obj.nsats,9+2*obj.biasEst*obj.nsats);
+            J = zeros(3*obj.nsats,9+2*obj.biasEst*obj.nsats);
 
             for i=1:obj.nsats
                 % find transmission time w.r.t meas, based on nav msg knowledge
@@ -292,11 +293,7 @@
                         [(dr'*dvdr/rho^3 - dv'/rho) -dr'/rho 0 1 0];
 
                     % add bias velocity approximation
-                    if obj.biasEst && ~isnan(tprev)
-                        dt = tr - tprev;
-                        H(i+2*obj.nsats,9+i) = 1/dt;
-                        J(i+2*obj.nsats,9+i) = -1/dt;
-                    end
+                    if obj.biasEst, H(i+2*obj.nsats,9+obj.nsats+i) = 1; end
                 end
                 % m, pseudorange (PLL)
                 if obj.user.rx.PLL && ~isnan(tprev)

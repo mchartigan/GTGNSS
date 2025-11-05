@@ -53,7 +53,7 @@ classdef SatellitePropagator < Propagator
 
             if options.bias
                 obj.bias = options.bias;
-                obj.dim = obj.dim + obj.bias;
+                obj.dim = obj.dim + 2*obj.bias;
                 
                 if isempty(options.biasnoise)
                     obj.biasnoise = zeros(obj.bias,1);
@@ -164,6 +164,8 @@ classdef SatellitePropagator < Propagator
             dxdt = [obj.orbit.dynamics(t,x(1:6)); obj.clock.dynamics(t,x(7:9)); ...
                     zeros(obj.bias,1)];
             dxdt(4:6) = dxdt(4:6) + obj.imu.read(t);
+            dxdt(7:8) = x(8:9);
+            dxdt(10:9+obj.bias) = x(10+obj.bias:end);
         end
 
         function A = partials(obj,t,x)
@@ -171,6 +173,8 @@ classdef SatellitePropagator < Propagator
             A = zeros(obj.dim, obj.dim);
             A(1:6,1:6) = obj.orbit.numpart(t,x(1:6));
             A(7:9,7:9) = obj.clock.partials(t,x(7:9));
+            A(10:9+obj.bias,10+obj.bias:end) = eye(obj.bias);
+            0;
         end
 
         function P = proplyapunov(obj,ts,x0,P0)
@@ -206,7 +210,10 @@ classdef SatellitePropagator < Propagator
             Q(7:9,7:9) = obj.clock.noise(dt);
 
             if obj.bias
-                Q(10:9+obj.bias,10:9+obj.bias) = diag(obj.biasnoise) * dt;
+                Q(10:9+obj.bias,10:9+obj.bias) = diag(obj.biasnoise) * dt^3/3;
+                Q(10+obj.bias:end,10:9+obj.bias) = diag(obj.biasnoise) * dt^2/2;
+                Q(10:9+obj.bias,10+obj.bias:end) = diag(obj.biasnoise) * dt^2/2;
+                Q(10+obj.bias:end,10+obj.bias:end) = diag(obj.biasnoise) * dt;
             end
 
             Q = Q * obj.scale;

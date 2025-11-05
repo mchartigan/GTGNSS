@@ -1,4 +1,4 @@
-classdef RandomRun < Propagator
+classdef RandomRunBias < Propagator
     %RANDOMRUN Random run model, where the rate of change is a random walk
     %process.
 
@@ -10,7 +10,7 @@ classdef RandomRun < Propagator
     end
 
     methods
-        function obj = RandomRun(var)
+        function obj = RandomRunBias(var)
             %RANDOMRUN Construct a Randomrun instance
             %   Input:
             %    - variance of random run process
