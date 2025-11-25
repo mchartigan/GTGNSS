@@ -20,7 +20,8 @@
         % reference frame of measurements (for geteph())
         frame   (1,:)   {mustBeText} = 'MOON_ME'
         % is bias estimation implemented? (changes # of states)
-        biasEst (1,1)   logical
+        bias    (1,:)   Propagator = RandomRun.empty
+        nbias   (1,1)   {mustBeInteger,mustBeNonnegative}
     end
 
     properties (Constant)
@@ -42,7 +43,7 @@
             arguments
                 sats    (1,:)   NavSatellite
                 user    (1,1)   User
-                options.biasEst (1,1)   logical = 0
+                options.bias (1,:) Propagator = RandomRun.empty
             end
 
             obj.sats = sats;
@@ -50,10 +51,11 @@
             obj.user = user;
             obj.m = 1 + user.rx.PLL + user.rx.FLL;
             obj.dim = 3 * obj.nsats;
-            obj.biasEst = options.biasEst;
+            obj.bias = options.bias;
+            obj.nbias = length(obj.bias);
         end
 
-        function [y,R,var] = getmeas(obj,ts)
+        function [y,R,var,err] = getmeas(obj,ts)
             %GETMEAS Returns measurements, that the receiver can make, for
             %the user at times ts.
             %   Input:
@@ -69,12 +71,13 @@
             x_user = obj.user.getstates(ts, obj.frame);
             obj.msgs = [];
             var = cell(obj.nsats,1);
+            err = cell(obj.nsats,1);
             R = zeros(obj.dim,obj.dim,n);
             CN0 = zeros(obj.nsats,n);
 
             for i=1:obj.nsats
                 % FIELD INCOMING MEASUREMENTS -- y_raw(ts) %
-                [T,dT,AP,msg,~,var1] = obj.sats(i).transmitsignal(ts, obj.user);
+                [T,dT,AP,msg,err1,var1] = obj.sats(i).transmitsignal(ts, obj.user);
                 CN0(i,:) = obj.user.rx.rxlinkbudget(AP);
                 [y_raw,~,var2] = obj.user.rx.tracksat(ts, T, dT, AP);
                 obj.msgs = [obj.msgs; msg];
@@ -105,18 +108,15 @@
                 end
                 % assign to cell array
                 var{i} = var1;
+                err{i} = err1;
 
 
                 % BUILD PSEUDORANGE AND DOPPLER %
                 % All the while adding the user clock bias and drift
                 % m, pseudorange
                 y(i,:) = y_raw(1,:) + x_user(7,:);
-                % if estimating measurement bias, remove bias 
-                if ~obj.biasEst
-                    R(i,i,:) = var1.total(1,:);
-                else
-                    R(i,i,:) = var1.total(1,:) - var1.ODTS(1,:);
-                end
+                R(i,i,:) = var1.total(1,:);
+
                 % m, delta-pseudorange
                 if obj.user.rx.PLL
                     y(i+obj.nsats,:) = y_raw(2,:) + x_user(7,:);
@@ -128,11 +128,19 @@
                 % m/s, Doppler
                 if obj.user.rx.FLL
                     y(i+2*obj.nsats,:) = y_raw(3,:) + x_user(8,:);
+                    R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:);
+                end
 
-                    if ~obj.biasEst
-                        R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:);
-                    else
-                        R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:) - var1.ODTS(3,:);
+                % if estimating bias, remove from meas. noise
+                if obj.nbias && obj.bias(i).dim ~= 0
+                    R(i,i,:) = R(i,i,:) - reshape(var1.eph_prop(1,:) + ...
+                        var1.clk_prop(1,:), 1, 1, []);
+
+                    if obj.user.rx.FLL && obj.bias(i).dim > 1
+                        R(i+2*obj.nsats,i+2*obj.nsats,:) = ...
+                            R(i+2*obj.nsats,i+2*obj.nsats,:) - ...
+                            reshape(var1.eph_prop(3,:) + ...
+                            var1.clk_prop(3,:), 1, 1, []);
                     end
                 end
             end
@@ -178,6 +186,7 @@
 
             y = nan(obj.dim,1);
             xs = zeros(9,obj.nsats);
+            k = 9;
 
             for i=1:obj.nsats
                 % find transmission time w.r.t meas, based on nav msg knowledge
@@ -202,14 +211,10 @@
 
                 % m, pseudorange (DLL)
                 y(i) = rho + x(7) - x_s(7);
-                % measurement bias
-                if obj.biasEst, y(i) = y(i) + x(9+i); end
 
                 % m/s, Doppler (FLL)
                 if obj.user.rx.FLL
-                    y(i + 2*obj.nsats) = dvdr/rho + x(8) - x_s(8);
-
-                    y(i+2*obj.nsats) = y(i+2*obj.nsats) + x(9+obj.nsats+i);
+                    y(i+2*obj.nsats) = dvdr/rho + x(8) - x_s(8);
                 end
 
                 % m, pseudorange (PLL)
@@ -232,10 +237,20 @@
                     rho = norm(dr);                 % scalar range
                     % change it to delta-pseudorange
                     y(i+obj.nsats) = y(i+obj.nsats) - (rho + xprev(7) - x_s(7));
-                    % account for measurement bias estimation
-                    if obj.biasEst
-                        y(i+obj.nsats) = y(i+obj.nsats) + x(9+i) - xprev(9+i);
+                end
+
+                % account for measurement biases
+                if obj.nbias && obj.bias(i).dim ~= 0
+                    y(i) = y(i) + x(k+1);
+
+                    if obj.user.rx.FLL && obj.bias(i).dim > 1
+                        y(i+2*obj.nsats) = y(i+2*obj.nsats) + x(k+2);
                     end
+                    if obj.user.rx.PLL && ~isnan(tprev)
+                        y(i+obj.nsats) = y(i+obj.nsats) + x(k+1) - xprev(k+1);
+                    end
+
+                    k = k + obj.bias(i).dim;
                 end
             end
         end
@@ -259,8 +274,9 @@
             r_u = x(1:3);           % user position
             v_u = x(4:6);           % user velocity
 
-            H = zeros(3*obj.nsats,9+2*obj.biasEst*obj.nsats);
-            J = zeros(3*obj.nsats,9+2*obj.biasEst*obj.nsats);
+            H = zeros(obj.dim, length(x));
+            J = zeros(obj.dim, length(x));
+            k = 9;
 
             for i=1:obj.nsats
                 % find transmission time w.r.t meas, based on nav msg knowledge
@@ -284,16 +300,11 @@
 
                 % m, pseudorange (DLL)
                 H(i,1:9) = [-dr'/rho 0 0 0 1 0 0];
-                % partial of bias
-                if obj.biasEst, H(i,9+i) = 1; end
 
                 % m/s, Doppler (FLL)
                 if obj.user.rx.FLL
                     H(i + 2*obj.nsats,1:9) = ...
                         [(dr'*dvdr/rho^3 - dv'/rho) -dr'/rho 0 1 0];
-
-                    % add bias velocity approximation
-                    if obj.biasEst, H(i+2*obj.nsats,9+obj.nsats+i) = 1; end
                 end
                 % m, pseudorange (PLL)
                 if obj.user.rx.PLL && ~isnan(tprev)
@@ -315,12 +326,21 @@
 
                     % find second measurement matrix
                     J(i + obj.nsats,1:9) = -[-dr'/rho 0 0 0 1 0 0];
+                end
 
-                    % partial of biases
-                    if obj.biasEst
-                        H(i+obj.nsats,9+i) = 1;
-                        J(i+obj.nsats,9+i) = -1;
+                % account for measurement biases
+                if obj.nbias && obj.bias(i).dim ~= 0
+                    H(i,k+1) = 1;
+
+                    if obj.user.rx.FLL && obj.bias(i).dim > 1
+                        H(i+2*obj.nsats,k+2) = 1;
                     end
+                    if obj.user.rx.PLL && ~isnan(tprev)
+                        H(i+obj.nsats,k+1) =  1;
+                        J(i+obj.nsats,k+1) = -1;
+                    end
+
+                    k = k + obj.bias(i).dim;
                 end
             end
         end

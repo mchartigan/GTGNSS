@@ -141,7 +141,7 @@ classdef Clock < Propagator
                 noise   (1,1)   = true
             end
             
-            rng(obj.seed)       % initialize rng for consistency
+            % rng(obj.seed)       % initialize rng for consistency
 
             % initialize variables
             n = length(ts);

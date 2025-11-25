@@ -1,4 +1,4 @@
-classdef RandomRunBias < Propagator
+classdef RandomRun < Propagator
     %RANDOMRUN Random run model, where the rate of change is a random walk
     %process.
 
@@ -7,11 +7,13 @@ classdef RandomRunBias < Propagator
         var (1,1)   double {mustBeNonnegative} = 0
         % dimension of state
         dim = 2
+        % scale factor
+        a   (1,1)   double = 1
     end
 
     methods
-        function obj = RandomRunBias(var)
-            %RANDOMRUN Construct a Randomrun instance
+        function obj = RandomRun(var)
+            %RANDOMRUN Construct a RandomRun instance
             %   Input:
             %    - variance of random run process
 
@@ -34,7 +36,7 @@ classdef RandomRunBias < Propagator
                 ts      (1,2)   double {mustBePositive}
                 x0      (:,1)   double
                 n       (1,1)   {mustBeInteger,mustBePositive}
-                noise   (1,1)   = true
+                noise   (1,1)   = false
             end
 
             % initialize variables
@@ -54,27 +56,20 @@ classdef RandomRunBias < Propagator
                 obj     (1,1)   RandomRun
                 ts      (1,:)   double {mustBeNonnegative}
                 x0      (:,1)   double
-                noise   (1,1)   = true
+                noise   (1,1)   = false
             end
-            
-            rng(obj.seed)       % initialize rng for consistency
 
             % initialize variables
             n = length(ts);
             xs = zeros(obj.dim,n);
             xs(:,1) = x0;
-            % set starting state of Markov processes as RV with mean 0 and
-            % variance U = sigma_m^2/(2*R)
-            for i=1:obj.m
-                xs(3+i,1) = mvnrnd(0, obj.sigma_m(i)^2/(2*obj.R(i)));
-            end
 
             for i=2:n
                 dt = ts(i) - ts(i-1);
                 stm = obj.STM(dt);
             
                 xs(:,i) = stm * xs(:,i-1);
-                if noise && obj.random
+                if noise
                     % innovation vector, J ~ N(0,Q)
                     J = mvnrnd(zeros(1,obj.dim), obj.noise(dt), 1)';
                     xs(:,i) = xs(:,i) + J;
@@ -95,15 +90,17 @@ classdef RandomRunBias < Propagator
             %the interval dt.
             %   Input:
             %    - dt; time interval, in s
-            Q = obj.var * [dt^3/3 dt^2/2; dt^2/2 dt];
+            Q = obj.var * [obj.a^2*dt^3/3 obj.a*dt^2/2; obj.a*dt^2/2 dt];
         end
-    end
 
-    methods (Static)
-
-        function A = partials()
+        function A = partials(obj)
             %PARTIALS Returns the jacobian of the state
-            A = [0 1; 0 0];
+            A = [0 obj.a; 0 0];
+        end
+
+        function Phi = STM(obj,dt)
+            %STM Returns the state transition matrix over a time step dt
+            Phi = [1 obj.a*dt; 0 1];
         end
     end
 end

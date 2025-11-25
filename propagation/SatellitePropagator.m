@@ -16,8 +16,8 @@ classdef SatellitePropagator < Propagator
         % optional scaling of process noise
         scale   (1,1)   double = 1
         % measurement bias and noise to add to propagator
-        bias    (1,1)   {mustBeNonnegative,mustBeInteger} = 0
-        biasnoise   (:,1)   double {mustBeNonnegative} = []
+        bias    (1,:)   Propagator = RandomRun.empty
+        nbias   (1,1)   {mustBeInteger,mustBeNonnegative} = 0
     end
 
     methods
@@ -33,8 +33,7 @@ classdef SatellitePropagator < Propagator
                 imu             (1,1)   IMU = IMU()
                 options.flight  (1,1)   = 0
                 options.tol     (1,1)   double {mustBePositive} = 1e-5
-                options.bias    (1,1)   {mustBeNonnegative,mustBeInteger} = 0
-                options.biasnoise   (:,1)   double {mustBeNonnegative} = []
+                options.bias    (1,:)   Propagator = RandomRun.empty
             end
             
             obj.orbit = orbit;
@@ -51,19 +50,14 @@ classdef SatellitePropagator < Propagator
                 obj.imu.step = obj.step;
             end
 
-            if options.bias
+            if ~isempty(options.bias)
+                % store bias models
                 obj.bias = options.bias;
-                obj.dim = obj.dim + 2*obj.bias;
-                
-                if isempty(options.biasnoise)
-                    obj.biasnoise = zeros(obj.bias,1);
-                elseif isscalar(options.biasnoise)
-                    obj.biasnoise = ones(obj.bias,1) * options.biasnoise;
-                elseif length(options.biasnoise) == obj.bias
-                    obj.biasnoise = options.biasnoise;
-                else
-                    error("SatellitePropagator:sizeMismatch", ...
-                        "biasnoise must be scalar or length of bias");
+                obj.nbias = length(obj.bias);
+
+                % add new dimensions
+                for i=1:obj.nbias
+                    obj.dim = obj.dim + obj.bias(i).dim;
                 end
             end
         end
@@ -79,11 +73,11 @@ classdef SatellitePropagator < Propagator
             %       this frame
             arguments
                 obj     (1,1)   SatellitePropagator
-                ts      (1,:)   double
+                ts      (1,2)   double
                 x0      (:,:)   double
                 n       (1,1)   {mustBeInteger,mustBePositive}
                 frame   (1,:)   char = obj.frame
-                noise   (1,1)   = true
+                noise   (1,1)   = false
             end
 
             ts = linspace(ts(1), ts(2), n);
@@ -103,7 +97,7 @@ classdef SatellitePropagator < Propagator
                 ts      (1,:)   double
                 x0      (:,:)   double
                 frame   (1,:)   char = obj.frame
-                noise   (1,1)   = true
+                noise   (1,1)   = false
             end
 
             xs = zeros(obj.dim, length(ts));
@@ -118,6 +112,13 @@ classdef SatellitePropagator < Propagator
                 end
             end
             xs(7:9,:) = obj.clock.runat(ts,x0(7:9),noise);
+
+            k = 9;
+            for i=1:obj.nbias
+                ind = k+1:k+obj.bias(i).dim;
+                xs(ind,:) = obj.bias(i).runat(ts,x0(ind),noise);
+                k = k + obj.bias(i).dim;
+            end
         end
         
         function xf = RK4(obj,ts,x0)
@@ -134,7 +135,7 @@ classdef SatellitePropagator < Propagator
             % get dynamics around equilibrium (t0). Using 1st order Taylor
             % expansion to minimize obj.dynamics calls.
             g = obj.orbit.dynamics(ts(1), x0);
-            G = obj.orbit.partials(ts(1), x0);
+            G = obj.orbit.numpart(ts(1), x0);
             xf = x0;
             for i=1:length(teval)-1
                 % time step
@@ -161,11 +162,17 @@ classdef SatellitePropagator < Propagator
             %    - t; time, seconds past J2000
             %    - x (9,1) double; state
 
-            dxdt = [obj.orbit.dynamics(t,x(1:6)); obj.clock.dynamics(t,x(7:9)); ...
-                    zeros(obj.bias,1)];
+            dxdt = zeros(obj.dim,1);
+            dxdt(1:6) = obj.orbit.dynamics(t,x(1:6));
             dxdt(4:6) = dxdt(4:6) + obj.imu.read(t);
-            dxdt(7:8) = x(8:9);
-            dxdt(10:9+obj.bias) = x(10+obj.bias:end);
+            dxdt(7:9) = obj.clock.dynamics(t,x(7:9));
+            
+            k = 9;
+            for i=1:obj.nbias
+                ind = k+1:k+obj.bias(i).dim;
+                dxdt(ind) = obj.bias(i).dynamics(t,x(ind));
+                k = k + obj.bias(i).dim;
+            end
         end
 
         function A = partials(obj,t,x)
@@ -173,8 +180,13 @@ classdef SatellitePropagator < Propagator
             A = zeros(obj.dim, obj.dim);
             A(1:6,1:6) = obj.orbit.numpart(t,x(1:6));
             A(7:9,7:9) = obj.clock.partials(t,x(7:9));
-            A(10:9+obj.bias,10+obj.bias:end) = eye(obj.bias);
-            0;
+            
+            k = 9;
+            for i=1:obj.nbias
+                ind = k+1:k+obj.bias(i).dim;
+                A(ind,ind) = obj.bias(i).partials();
+                k = k + obj.bias(i).dim;
+            end
         end
 
         function P = proplyapunov(obj,ts,x0,P0)
@@ -209,11 +221,11 @@ classdef SatellitePropagator < Propagator
             Q(1:6,1:6) = obj.orbit.noise(dt,x(1:6)) + obj.imu.noise(dt);
             Q(7:9,7:9) = obj.clock.noise(dt);
 
-            if obj.bias
-                Q(10:9+obj.bias,10:9+obj.bias) = diag(obj.biasnoise) * dt^3/3;
-                Q(10+obj.bias:end,10:9+obj.bias) = diag(obj.biasnoise) * dt^2/2;
-                Q(10:9+obj.bias,10+obj.bias:end) = diag(obj.biasnoise) * dt^2/2;
-                Q(10+obj.bias:end,10+obj.bias:end) = diag(obj.biasnoise) * dt;
+            k = 9;
+            for i=1:obj.nbias
+                ind = k+1:k+obj.bias(i).dim;
+                Q(ind,ind) = obj.bias(i).noise(dt);
+                k = k + obj.bias(i).dim;
             end
 
             Q = Q * obj.scale;

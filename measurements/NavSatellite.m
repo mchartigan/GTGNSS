@@ -248,7 +248,7 @@ classdef NavSatellite < handle
             for i=1:length(tmsg)-1
                 % nav states are applicable starting at tt(1)-1, so this logic
                 % should cover all tt
-                jj = and(tt > tmsg(i), tt < tmsg(i+1));
+                jj = and(tt > tmsg(i), tt <= tmsg(i+1));
                 % % store nav uncertainty
                 Pnav(:,:,jj) = repmat(Pmsg(:,:,i), 1, 1, sum(jj));
                 % propagate states over given times. tmsg(i) provided so
