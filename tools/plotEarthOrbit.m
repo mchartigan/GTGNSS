@@ -20,8 +20,8 @@ R_p = 6356.752;         % km, earth polar radius
 [Imoon, ~] = imread("ModifiedBlueMarble.jpg");
 [xx, yy, zz] = ellipsoid(0, 0, 0, R_e, R_e, R_p);
 
-% Rotate moon from ITRF frame to plot_frame
-T = cspice_pxform('ITRF93', plot_frame, ts(end));
+% Rotate Earth from IAU frame to plot_frame
+T = cspice_pxform('IAU_EARTH', plot_frame, ts(end));
 for j=1:size(xx,1)
     for k=1:size(xx,2)
         % -z to flip image

@@ -36,7 +36,7 @@ classdef LunarPropagator < OrbitPropagator
             passargs = namedargs2cell(options);
             obj = obj@OrbitPropagator(ord,passargs{:});
             
-            cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
+            % cspice_furnsh(strcat(userpath,'/kernels/generic/mk/generic_lunar.tm'));
             % [R,C,S,norms] = cofloader("LP165P.cof", false);
             [R,C,S,norms] = sha_loader("gggrx_0900c_sha.tab", 200);
             

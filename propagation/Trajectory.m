@@ -9,7 +9,7 @@ classdef Trajectory < handle
         ts      (1,:)   double  % time series
         xs      (:,:)   double  % states over time
         frame   (1,:)   char    % reference frame of states (if applicable)
-        dim     (1,1)   {mustBeInteger,mustBePositive} = 1  % state dimension
+        dim     (1,1)   {mustBeInteger,mustBeNonnegative} = 1  % state dimension
     end
     properties (Access = private)
         pp      (1,1)   struct  % piecewise polynomial struct
