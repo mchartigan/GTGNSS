@@ -149,20 +149,22 @@
             % tplot = (ts - ts(1)) / 60;
             % figure();
             % plotformat("APA", 0.5);
+            % styles = {'-', '--', '-.', ':'};
+            % plot(0, 0, color='none');
+            % hold on;
             % for i=1:obj.nsats
             %     valid = CN0(i,:) > 0;
-            %     plot(tplot(valid), CN0(i,valid), LineWidth=1.5);
-            %     if i==1, hold on; end
+            %     plot(tplot(valid), CN0(i,valid), LineWidth=2, ...
+            %         LineStyle=styles{mod(i-1,4)+1});
             % end
             % hold off; grid on;
             % axis([tplot(1) tplot(end) 35 50]);
             % ax = xticklabels;
             % xticklabels(flip(ax));
-            % linestyleorder("mixedstyles")
             % xlabel("Time (mins)");
             % ylabel("C/N0 (dB-Hz)");
             % title("Receiver CN0 for each LDN link");
-            % legend(["LDN-1", "LDN-2", "LDN-3", "LDN-4", "LDN-5"], location="best");
+            % legend(["", "LDN-1", "LDN-2", "LDN-3", "LDN-4", "LDN-5"], location="best");
         end
 
         function [y,xs] = computemeas(obj,tr,x,tprev,xprev)

@@ -273,9 +273,11 @@ classdef LunarPropagator < OrbitPropagator
             scatter3(lsp(1), lsp(2), lsp(3), 100, "red", "filled", "pentagram");
             
             % plot user trajectory for same time frame
+            styles = {'-', '--', '-.', ':'};
             for k=1:size(data,3)
                 plot3(data(:,1,k), data(:,2,k), data(:,3,k), "LineWidth", 1.5, ...
-                    "Marker", "diamond", "MarkerIndices", length(ts));
+                    "Marker", "diamond", "MarkerIndices", length(ts), ...
+                    LineStyle=styles{mod(k-1,4)+1});
             end
             
             grid on; axis equal;
