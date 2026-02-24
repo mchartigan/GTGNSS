@@ -269,6 +269,31 @@ classdef Clock < Propagator
             s = part_WFM + part_RWFM + part_RRFM + part_M;
         end
 
+        function y = adev(obj,dt)
+            %ADEV Returns the Allan deviation at time intervals ts. Clock
+            %behavior is governed by x.
+            %   Input:
+            %    - x (obj.dim,1) double {mustBeNonnegative}; variances and
+            %       time constants for the 3-state clock model with obj.m
+            %       Markov processes.
+            %    - ts (1,:) double {mustBeNonnegative}; evaluation times,
+            %       in seconds
+
+            s1 = obj.sigma_wf;
+            s2 = obj.sigma_rw;
+
+            y = s1^2./dt + s2^2*dt/3 + obj.a^2*dt.^2/2;
+
+            % for j=6:2:obj.dim
+            %     sm = x(j);
+            %     Rm = x(j+1);
+            %     y = y + sm^2 * (-3/2 + Rm*ts + 2*exp(-Rm*ts) - ...
+            %                     exp(-2*Rm*ts)/2) ./ (Rm^3 * ts.^2);
+            % end
+
+            y = sqrt(y);
+        end
+
         function Q = noise(obj,dt,~)
             %PNC Returns the discrete-time process noise covariance.
             %   Input:
