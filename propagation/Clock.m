@@ -262,8 +262,8 @@ classdef Clock < Propagator
                 sm = obj.sigma_m(i);
                 Ri = obj.R(i);
                 part_M = part_M + ...
-                    sm^2*(-10 + 6*Ri*dt + 15*exp(-Ri*dt) - 6*exp(-2*Ri*dt) + exp(-3*Ri*dt)) ./ ...
-                    (6*Ri^3*dt.^2);
+                    sm^2*(Ri*dt - 5/3 + 5/2*exp(-Ri*dt) - exp(-2*Ri*dt) + exp(-3*Ri*dt)/6) ./ ...
+                    (Ri^3*dt.^2);
             end
 
             s = part_WFM + part_RWFM + part_RRFM + part_M;

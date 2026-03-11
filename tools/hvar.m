@@ -1,5 +1,5 @@
-function [T,E,df] = avar(t,x,ints)
-%AVAR Compute the traditional Allan variance of provided phase data
+function [T,E,df] = hvar(t,x,ints)
+%AVAR Compute the overlapping Hadamard variance of provided phase data
 %   Input:
 %    - t; time of phase measurements
 %    - phase; measurements of phase offset (in s) of DUT vs reference
@@ -22,11 +22,11 @@ t = t - t(1);       % set start of interval to 0
 N = length(t);      % number of samples
 tau = t(2) - t(1);  % time between adjacent samples
 % log-scale intervals to reduce computational load
-nf = floor((N-1)/2);                    % max timestep
+nf = floor((N-1)/3);            % max timestep
 if isempty(ints)
     ints = 10.^(log10(tau):0.2:log10(nf));  % log-spaced intervals
 end
-n = unique(round(ints/tau)*tau);        % unique intervals at multiples of tau
+n = unique(round(ints/tau));    % unique intervals at multiples of tau
 E = zeros(1,length(n));
 
 % wpm = (N+1)*(N-2*n)./(2*(N-n));
@@ -49,11 +49,11 @@ df = 5*N^2./(4*n.*(N+3*n));
 % hold off; grid on;
 % legend(["wpm","fpm","wfm","ffm","rwfm"]);
 
-% compute overlapping Allan variance
+% compute overlapping Hadamard variance
 for i=1:length(n)
-    k = 1:N-2*n(i);
-    x_sum = sum((x(k+2*n(i)) - 2*x(k+n(i)) + x(k)).^2);
-    E(i) = x_sum / (2*n(i)^2*tau^2*(N - 2*n(i)));
+    k = 1:N-3*n(i);
+    x_sum = sum((x(k+3*n(i)) - 3*x(k+2*n(i)) + 3*x(k+n(i)) - x(k)).^2);
+    E(i) = x_sum / (6*n(i)^2*tau^2*(N - 3*n(i)));
 end
 
 T = n*tau;          % time intervals
