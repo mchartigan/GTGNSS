@@ -9,6 +9,21 @@ function [r_, v_] = oe2rv(a, e, i, RAAN, w, f, mu)
 %  - w; argument of periapsis [rad]
 %  - f; true anomaly [rad]
 %  - mu; gravitational parameter of body being orbited, [km^3 / s^2]
+%
+% Alternate input:
+%  - oe; struct of orbital elements {a,e,i,RAAN,w,f}
+%  - mu; same as above
+
+% parse optional struct input
+if nargin == 2
+    mu = e;
+    e = a.e;
+    i = a.i;
+    RAAN = a.RAAN;
+    w = a.w;
+    f = a.f;
+    a = a.a;
+end
 
 p = a*(1 - e^2);                    % semi-latus rectum [km]
 r = p / (1 + e*cos(f));             % radial position [km]

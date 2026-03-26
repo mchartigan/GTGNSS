@@ -185,6 +185,83 @@ classdef NavSatellite < handle
             end
         end
 
+        function [T,dT,AP,msg,err,var] = transmitearthsignal(obj,ts,user)
+            %TRANSMITEARTHSIGNAL Computes the true transmit time (s) and Doppler
+            %shift (s/s) between the satellite and the user. Navigation message
+            %data necessary to reconstruct measurements is generated. Errors are
+            %decomposed by source and provided as additional output.
+            %   Input:
+            %    - ts; eval time steps, seconds past J2000
+            %    - user; User object instance
+            %    - frame; reference frame user data is provided in
+            %    - opts; settings struct, fields include:
+            %       - SISE; "NASA" or "custom"
+            %       - cadence; see generatemodels input, only used if SISE
+            %          is "custom"
+            %   Output:
+            %    - T; transmitter-receiver delay (s)
+            %    - dT; transmitter-receiver Doppler (s/s)
+            %    - AP; power at the user antenna, dBW
+            %    - msg; struct containing navigation message data
+            %    - err; error applied to T and dT
+            %    - var; variance of error err
+            arguments
+                obj     (1,1)   NavSatellite
+                ts      (1,:)   double
+                user    (1,1)   User
+            end
+
+            % get true measurements
+            % run propagator to get trajectory estimate
+            [tt, r, dr] = obj.timeofflight(ts, user);
+
+            % SIGNAL IN SPACE ERROR CALCULATION %
+            [err,var,msg,los] = obj.getSISE(tt,ts,user);
+
+            % OUTPUT FORMATTING %
+            % add applicable error to delay and Doppler
+            xc = obj.traj(2).get(tt);
+            T  = r  - xc(1,:) - err.clk_prop(1,:);
+            dT = dr - xc(2,:) - err.clk_prop(2,:);
+
+            % ANTENNA MASK %
+            AP = obj.txlinkbudget(r);
+            % add transmitter mask to link budget %
+            xuser = user.getstates(ts, 'MOON_ME');
+            xsat  = obj.traj(1).get(tt, 'MOON_ME');
+            % get nadir direction at user at each time step
+            nadir = xuser(1:3,:) ./ sqrt(sum(xuser(1:3,:).^2, 1));
+            % get zenith direction at sat at each time step
+            zenith = -xsat(1:3,:) ./ sqrt(sum(xsat(1:3,:).^2, 1));
+            % compute angle between nadir and satellite
+            tosat = acos(sum(nadir .* los, 1));
+            % compute angle between zenith and user
+            touser = acos(sum(zenith .* -los, 1));
+            % -300 dB if angles are over off-boresight mask angle
+            AP = AP - 300 * (tosat > pi/2 - user.ant.mask);
+            AP = AP - 300 * (touser > pi/2 - obj.ant.mask);
+
+            % PLANET INTERSECTION CALCULATION %
+            R = cspice_bodvrd('MOON', 'RADII', 3) * 1e3;
+            R = R(1);           % radius of moon
+            for i=1:length(ts)
+                x_s = xsat(1:3,i);
+                r_s = norm(x_s);
+                r_su = norm(xuser(1:3,i) - x_s);
+                u_us = los(1:3,i);
+                a_sm = asin(R/r_s);
+                a_su = acos(u_us' * x_s / r_s);
+                r_t = sqrt(r_s^2 - R^2);
+                % if the moon center/moon tangent angle from the satellite
+                % POV is bigger than the moon center/sat-user angle and the
+                % range is > moon tangent range, satellite is out of view.
+                if a_su < a_sm && r_su > r_t
+                    T(i)  = NaN;
+                    dT(i) = NaN;
+                end
+            end
+        end
+
         function [err,var,msg,los,bias] = getSISE(obj,tt,ts,user)
             %GETSISE Return the signal in space error for the satellite to
             %the given user.

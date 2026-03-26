@@ -117,7 +117,7 @@ classdef OrbitPropagator < Propagator
                 ts      (2,1)   double
                 x0      (6,:)   double
                 n       (1,1)   {mustBeInteger,mustBePositive}
-                frame   (1,:)   char
+                frame   (1,:)   char = 'J2000'
             end
 
             ts = linspace(ts(1), ts(2), n);
@@ -146,8 +146,8 @@ classdef OrbitPropagator < Propagator
             % transform starting state to inertial
             
             for i=1:nsats
-                x0 = cspice_sxform(frame, 'J2000', ts(1)) * x0(:,i);
-                [~,X] = ode89(@obj.dynamics, ts, x0, obj.opts);
+                x0i = cspice_sxform(frame, 'J2000', ts(1)) * x0(:,i);
+                [~,X] = ode89(@obj.dynamics, ts, x0i, obj.opts);
                 X = X';
                 % catch and bounce if propagation failed
                 if size(X,2) < n
