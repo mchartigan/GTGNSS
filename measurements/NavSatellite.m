@@ -30,8 +30,6 @@ classdef NavSatellite < handle
         Pn      (9,9,:) double
         % satellite ID number
         ID      (1,1)   {mustBeInteger,mustBeNonnegative}
-        % central body
-        body    (1,:)   {mustBeText} = 'MOON'
         % should debug info be printed?
         DEBUG   (1,1)
         % various constant error variances
@@ -84,7 +82,6 @@ classdef NavSatellite < handle
                 options.ID      (1,1)   {mustBeNonnegative,mustBeInteger} = 0
                 options.cadence (1,1)   {mustBePositive} = 7200
                 options.debug   (1,1)   double = false
-                options.body    (1,:)   {mustBeText} = 'MOON'
             end
             % permit empty instantiation
 
@@ -115,7 +112,6 @@ classdef NavSatellite < handle
             obj.ID = options.ID;
             if ~options.debug, warning('off', 'NavSatellite:debug'); end
             obj.DEBUG = options.debug;
-            obj.body = options.body;
         end
 
         function [T,dT,CN0,msg,err,var] = transmitsignal(obj,ts,user)
@@ -147,10 +143,10 @@ classdef NavSatellite < handle
             % create copy of user (shallow, so referenced objects are same unfort)
             olduser = user;
             user = copy(user);
-            % adjust user to be relative to obj.body
+            % adjust user to be relative to obj.prop.body
             xtemp = user.motion.xs;
-            xtemp = xtemp + ...
-                cspice_spkezr(user.body, user.motion.ts, user.motion.frame, 'NONE', obj.body);
+            xtemp(1:6,:) = xtemp(1:6,:) + cspice_spkezr(user.body, ...
+                user.motion.ts, user.motion.frame, 'NONE', obj.prop.body) * 1e3;
             user.motion = Trajectory(user.motion.ts, xtemp, user.motion.frame);
 
             % get true measurements
@@ -168,17 +164,17 @@ classdef NavSatellite < handle
 
             % ANTENNA GAIN %
             % compute transmitter angle %
-            % state of user w.r.t. obj.body
-            xuser = user.getstates(ts, 'J2000');
-            % state of sat w.r.t. obj.body
+            % state of user w.r.t. obj.prop.body
+            xuser = user.motion.getpos(ts, 'J2000');
+            % state of sat w.r.t. obj.prop.body
             xsat  = obj.traj(1).get(tt, 'J2000');
-            % get User->obj.body direction at each time step
+            % get User->obj.prop.body direction at each time step
             u_u1 = -xuser ./ sqrt(sum(xuser.^2, 1));
             % get nadir direction at sat at each time step
             u_s1 = -xsat(1:3,:) ./ sqrt(sum(xsat(1:3,:).^2, 1));
             % compute angle between nadir and user
             touser = acos(sum(u_s1 .* -los, 1));
-            % compute angle between User->obj.body dir and satellite
+            % compute angle between User->obj.prop.body dir and satellite
             tosat = acos(sum(u_u1 .* los, 1));
             % determine received power at user antenna
             AP = obj.txlinkbudget(r,touser);
@@ -186,8 +182,8 @@ classdef NavSatellite < handle
 
             % PLANET INTERSECTION CALCULATION %
             % primary body
-            R1 = cspice_bodvrd(obj.body, 'RADII', 3) * 1e3;
-            R1 = max(R1);       % radius of obj.body, m
+            R1 = cspice_bodvrd(obj.prop.body, 'RADII', 3) * 1e3;
+            R1 = max(R1);       % radius of obj.prop.body, m
             
             for i=1:length(ts)
                 x_s = xsat(1:3,i);                  % Moon -> sat
@@ -209,7 +205,7 @@ classdef NavSatellite < handle
 
             % evaluate second body intersection if user and satellite
             % aren't around the same central body
-            if ~strcmpi(obj.body, user.body)
+            if ~strcmpi(obj.prop.body, user.body)
                 % user trajectory relative to its own central body
                 xuser = olduser.getstates(ts, 'J2000');
                 % secondary body
@@ -350,7 +346,7 @@ classdef NavSatellite < handle
             end
 
             n = length(ts);     % no. of measurements
-            frame = 'MOON_ME';
+            frame = 'J2000';
             % get reference trajectory of satellite and clock
             xref = zeros(9,n);
             xref(1:6,:) = obj.traj(1).get(tt, frame);
@@ -412,8 +408,10 @@ classdef NavSatellite < handle
     
                     % compute model states and all errors/variances
                     for k=find(jj)
-                        xmdl(:,k) = RadiometricObsSim.geteph(tt(k), obj.ID, msg(i,:));
+                        [xmdl(:,k),T] = RadiometricObsSim.geteph(tt(k), obj.ID, msg(i,:));
     
+                        % rotate to inertial since that's where we're handling
+                        xmdl(1:6,k) = T \ xmdl(1:6,k);
                         % compute time step errors
                         err_prop = xprop(:,k) - xref(:,k);
                         err_mdl = xmdl(:,k) - xprop(:,k);
@@ -598,7 +596,7 @@ classdef NavSatellite < handle
                 obj     (1,1)   NavSatellite
                 ts      (1,:)   double
                 user    (1,1)   User
-                tol     (1,1)   double = 1e-9
+                tol     (1,1)   double = 1e-3
             end
 
             n = length(ts);
@@ -615,7 +613,7 @@ classdef NavSatellite < handle
             for i=1:n
                 rlast = r(i);
 
-                for j=1:10
+                for j=1:20
                     dt = rlast / obj.c;         % range to time-of-flight (s)
                     tj = ts(i) - dt;            % time offset guess
                     % updated range guess
@@ -627,13 +625,12 @@ classdef NavSatellite < handle
                         tt(i) = tj;
                         r(i) = rj;
                         break;
+                    elseif j == 10
+                        error("timeofflight:notConverged", ...
+                            "Time %d failed to converge in %d iterations.", i, j);
                     end
 
                     rlast = rj;                 % update iteration
-                end
-                if j == 10
-                    warning("timeofflight:notConverged", ...
-                        "Time %d failed to converge in %d iterations.", i, j);
                 end
                 
                 % compute range-rate by finding projection of relative

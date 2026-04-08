@@ -1,4 +1,4 @@
-classdef User < handle
+classdef User < handle & matlab.mixin.Copyable
     %USER Stores trajectory, receiver, and antenna information for user
     %navigation.
     

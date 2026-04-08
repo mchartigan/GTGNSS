@@ -29,7 +29,7 @@ classdef ReceiveAntenna < Antenna
             %   Output:
             %    - CN0; carrier-to-noise density ratio, dB-Hz
             arguments (Input)
-                obj     (1,1)   Receiver
+                obj     (1,1)   ReceiveAntenna
                 AP      (1,:)   double
                 beta    (1,:)   double
             end

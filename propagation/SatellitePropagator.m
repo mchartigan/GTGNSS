@@ -18,6 +18,8 @@ classdef SatellitePropagator < Propagator
         % measurement bias and noise to add to propagator
         bias    (1,:)   Propagator = RandomRun.empty
         nbias   (1,1)   {mustBeInteger,mustBeNonnegative} = 0
+        % central body
+        body    (1,:)   {mustBeText} = 'MOON'
     end
 
     methods
@@ -34,12 +36,14 @@ classdef SatellitePropagator < Propagator
                 options.flight  (1,1)   = 0
                 options.tol     (1,1)   double {mustBePositive} = 1e-5
                 options.bias    (1,:)   Propagator = RandomRun.empty
+                options.body    (1,:)   {mustBeText} = 'MOON'
             end
             
             obj.orbit = orbit;
             obj.clock = clock;
             obj.imu = imu;
             obj.flight = options.flight;
+            obj.body = options.body;
 
             if obj.flight
                 % compute RK4 step size. Since alg error is O(h^5), solve for h
