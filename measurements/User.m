@@ -11,6 +11,7 @@ classdef User < handle
         rx      (1,1)   Receiver
         % receiver antenna
         ant     (1,1)   ReceiveAntenna
+        body    (1,:)   {mustBeText} = 'MOON'
     end
     
     methods

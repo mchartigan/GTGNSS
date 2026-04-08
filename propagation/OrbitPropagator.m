@@ -39,17 +39,21 @@ classdef OrbitPropagator < Propagator
         % solar radiation pressure constants %
         % kN/m^2 (Pa), solar radiation pressure at Earth, given by the solar
         % constant at Earth (W/m^2) divided by the speed of light (m/s)
-        Ps = 1361/299792458 * 1e-3
+        Ps   = 1361/299792458 * 1e-3
         % km, 1 astronomical unit (average Earth-sun distance)
-        AU = 149597870.700
+        AU   = 149597870.700
         % km, radius of the sun
-        Rs = 695700
+        Rs   = 695700
         % km, radius of the Earth
-        Re = 6378.1366
+        Re   = 6378.1366
         % km, radius of the moon
-        Rm = 1737.4
+        Rm   = 1737.4
         % unit multiplier (1e3 if m, 1 if km)
         unit = 1
+        % TDB-TCB rate coefficient
+        L_B  = 1.550519768e-8
+        % m/s, speed of light
+        c    = 299792458
     end
     
     methods
@@ -531,9 +535,53 @@ classdef OrbitPropagator < Propagator
             q = slerp(qs(low), qs(high), tau);
             R = quat2rotm(q);
         end
-    end
 
-    methods
+        function [tau,rate] = propertimeoffset(obj,t,traj)
+            %PROPERTIMEOFFSET Returns the offset of proper time from TDB,
+            %   tau(t) - t (in TDB seconds)
+            %at the provided TDB times. Assumes t(1) = tau(1)
+            %   Input:
+            %    - t; time(s) in seconds past J2000, TDB
+            %    - traj; satellite Trajectory instance of position and velocity
+            %       relative to primary body, valid over t
+            %   Output:
+            %    - tau; s, offset tau - TDB
+            %    - rate; s/s, relativistic rate dtau/dTDB
+            arguments
+                obj     (1,1)   OrbitPropagator
+                t       (1,:)   double
+                traj    (1,1)   Trajectory
+            end
+
+            n = length(t);
+            t0 = t(1);
+
+            % compute states relative to SSB
+            x_SSB = cspice_spkezr(obj.pri.name, t, 'J2000', 'NONE', 'SSB');
+            x_sc = traj.get(t, 'J2000');
+            traj = Trajectory(t, x_sc + x_SSB, 'J2000');
+
+            % consider all major planets for gravitational potential
+            % MERCURY BARYCENTER (1)  SATURN BARYCENTER (6)   MERCURY (199)
+            % VENUS BARYCENTER (2)    URANUS BARYCENTER (7)   VENUS (299)
+            % EARTH BARYCENTER (3)    NEPTUNE BARYCENTER (8)  MOON (301)
+            % MARS BARYCENTER (4)     PLUTO BARYCENTER (9)    EARTH (399)
+            % JUPITER BARYCENTER (5)  SUN (10)
+            np = [10 399 301 299 5 6 4 199 7 8];
+            GMs = arrayfun(@(x) cspice_bodvrd(num2str(x), 'GM', 1), np);
+
+            % compute integral
+            relrate = @(p) obj.integrand(p, @(q) traj.getpos(q,'J2000'), ...
+                @(q) traj.getvel(q,'J2000'), np, GMs);
+            relint = zeros(size(t));
+            for i=2:n
+                relint(i) = relint(i-1) + integral(relrate, t(i-1), t(i), RelTol=1e-11);
+            end
+
+            tau = obj.L_B/(1 - obj.L_B)*(t - t0) - 1/(1 - obj.L_B)/obj.c^2 * relint;
+            rate = 1/(1 - obj.L_B) * (1 - 1/obj.c^2*relrate(t));
+        end
+
         function plotelements(obj,traj,frame)
             %PLOTELEMENTS Plots the orbital elements of a given trajectory.
 
@@ -546,7 +594,7 @@ classdef OrbitPropagator < Propagator
             fs = zeros(1,n);
 
             for i=1:n
-                [as(i) es(i) is(i) RAANs(i) ws(i) fs(i)] = ...
+                [as(i),es(i),is(i),RAANs(i),ws(i),fs(i)] = ...
                     rv2oe(traj.get(traj.ts(i), frame), obj.pri.GM);
             end
 
@@ -684,6 +732,32 @@ classdef OrbitPropagator < Propagator
                 end
                 x(:,i) = [rf; vf];
             end
+        end
+    end
+
+    methods (Access=private, Static)
+        function f = integrand(t,r,v,planets,GMs)
+            %INTEGRAND Relativistic function to be integrated to solve for
+            %proper time - TDB difference.
+            %   Input:
+            %    - t; time(s) (in TDB)
+            %    - r; position function of LDN spacecraft
+            %    - v; velocity function of LDN spacecraft
+            %    - planets; integer IDs of planets to consider
+            %    - GMs; gravitational parameters of planets
+        
+            % squared scalar velocities
+            f = sum(v(t).^2, 1)/2;
+        
+            % planetary contributions
+            for i=1:length(planets)
+                f = f + GMs(i) ./ sqrt(sum((cspice_spkpos(...
+                    num2str(planets(i)), t, 'J2000', 'NONE', 'SSB') ...
+                    - r(t)).^2, 1));
+            end
+        
+            % convert to m^2
+            f = f * 1e6;
         end
     end
 end

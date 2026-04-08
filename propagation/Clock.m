@@ -53,7 +53,7 @@ classdef Clock < Propagator
         n_noise     (1,:)   double = []
     end
     properties (Constant)
-        c   = 299792458;    % m/s, speed of light
+        c   = 299792458     % m/s, speed of light
     end
     
     methods
@@ -338,6 +338,13 @@ classdef Clock < Propagator
                 obj (1,1)   Clock
                 fc  (1,1)   double {mustBePositive}
                 Bn  (1,1)   double {mustBePositive}
+            end
+
+            % catch if clock is none
+            if isinf(obj.n_noise)
+                err = 0;
+                var = 0;
+                return;
             end
 
             % noise bandwidth presumed two-sided, so get one side

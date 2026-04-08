@@ -3,8 +3,6 @@ classdef Receiver < handle
     %and carrier tracking loops.
     
     properties
-        % antenna object
-        ant     (1,1)   ReceiveAntenna
         % receiver clock, units in m %
         clock       (1,1)   Clock = Clock("none", zeros(4,1))
 
@@ -61,30 +59,32 @@ classdef Receiver < handle
     end
 
     methods
-        function obj = Receiver(antenna,clock,PLL,FLL)
+        function obj = Receiver(clock,PLL,FLL)
             %RECEIVER Creates a Receiver instance. Specify at least the
             %carrier tracking loop type (or "none").
             %   Input:
-            %    - clock; receiver clock
-            %    - carrierloop; carrier tracking loop type, "PLL", "FLL",
-            %                   or "none"
-
-            if nargin ~= 0
-                obj.ant = antenna;
-                obj.clock = clock;
-                obj.PLL = PLL;
-                obj.FLL = FLL;
+            %    - clock; receiver Clock object
+            %    - PLL; flag indicating if receiver has phase locked loop
+            %    - FLL; flag if receiver has frequency locked loop
+            arguments
+                clock   (1,1)   Clock = Clock("none", zeros(4,1))
+                PLL     (1,1)   = false
+                FLL     (1,1)   = false
             end
+
+            obj.clock = clock;
+            obj.PLL = PLL;
+            obj.FLL = FLL;
         end
 
-        function [y,err,var] = tracksat(obj,ts,T,dT,AP)
+        function [y,err,var] = tracksat(obj,ts,T,dT,CN0)
             %NOISE Returns the range and range-rate error (and variance) of
             %the receiver measurements.
             %   Input:
             %    - ts; eval time steps, seconds past J2000
             %    - T; transmitter-receiver delays (s) to compute error for
             %    - dT; transmitter-receiver Doppler (s/s)
-            %    - AP; power at the user antenna, dBW
+            %    - CN0; received carrier to noise density ratio, dB-Hz
             %   Output:
             %    - y; returned measurements of signal. For DLL, y(1,:) is
             %         the measured transmission delay in s. If PLL, y(2,:) is
@@ -99,10 +99,9 @@ classdef Receiver < handle
                 ts          (1,:)   double
                 T           (1,:)   double
                 dT          (1,:)   double
-                AP          (1,:)   double
+                CN0         (1,:)   double
             end
 
-            CN0 = obj.rxlinkbudget(AP);
             CN0 = 10.^(CN0/10);                 % Hz, converted from dB-Hz for below equations
             Tc = 1/obj.Rc;                      % s (or s/chip), chip period
 
@@ -274,25 +273,6 @@ classdef Receiver < handle
             % mask out invalid measurements
             y(~track) = NaN;
             var.total(~track) = NaN;
-        end
-
-        function CN0 = rxlinkbudget(obj,AP)
-            %RXLINKBUDGET Computes the carrier to noise density ratio at
-            %the user receiver based on received power and antenna
-            %parameters.
-            %   Input:
-            %    - AP; power at the user antenna, dBW
-            %   Output:
-            %    - CN0; carrier-to-noise density ratio, dB-Hz
-            arguments (Input)
-                obj (1,1)   Receiver
-                AP  (1,:)   double
-            end
-            
-            RP = AP + obj.ant.gain + obj.ant.As;        % dBW, gain before amps
-            k = 1.3803e-23;                             % J/K, Boltzmann's constant
-            N0 = 10*log10(k * obj.ant.Ts);              % dBW/Hz, noise power spectral density
-            CN0 = RP + obj.ant.Nf + obj.ant.L - N0;     % dB*Hz, carrier to noise density ratio
         end
     end
 end

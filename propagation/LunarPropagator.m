@@ -284,9 +284,19 @@ classdef LunarPropagator < OrbitPropagator
             if strcmp(frame, 'J2000'), frame = 'ICRF'; end
             SUB = strsplit(frame,"_");
             SUB = SUB(end);
-            xlabel("x_{"+SUB+"} (km)");
-            ylabel("y_{"+SUB+"} (km)");
-            zlabel("z_{"+SUB+"} (km)");
+
+            % make sure units are appropriately tagged in plots
+            if obj.unit == 1e3
+                UNIT = "m";
+            elseif obj.unit == 1
+                UNIT = "km";
+            else
+                error("plot:unknownUnit", ...
+                    "Unit multiplier %d not known.", obj.unit);
+            end
+            xlabel("x_{"+SUB+"} ("+UNIT+")");
+            ylabel("y_{"+SUB+"} ("+UNIT+")");
+            zlabel("z_{"+SUB+"} ("+UNIT+")");
             title("Satellite trajectories");
         end
     end

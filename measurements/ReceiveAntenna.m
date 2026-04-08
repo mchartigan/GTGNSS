@@ -12,6 +12,43 @@ classdef ReceiveAntenna < Antenna
         % dB, receiver conversion losses [default -1.5 dB from ODTBX gpsmeas()]
         L       (1,1)   double = -1.5
     end
+    properties (Constant)
+        k = 1.3803e-23      % J/K, Boltzmann's constant
+    end
+
+    methods
+        function CN0 = getCN0(obj,AP,beta)
+            %GETGAIN Computes the carrier to noise density ratio at
+            %the user receiver based on received power and antenna
+            %parameters.
+            %   Input:
+            %    - AP; power at the user antenna, dBW
+            %    - beta; angle between direction to central body of satellite
+            %       and to satellite, rad. A lunar satellite would be
+            %       Earth-pointing for GNSS and nadir pointing for LunaNet
+            %   Output:
+            %    - CN0; carrier-to-noise density ratio, dB-Hz
+            arguments (Input)
+                obj     (1,1)   Receiver
+                AP      (1,:)   double
+                beta    (1,:)   double
+            end
+
+            if numel(obj.gain) > 1
+                % convert to deg, wrap to [0,180] (ignore directionality)
+                beta = abs(wrapToPi(beta)) * 180/pi;
+                G = interp1(obj.gain(:,1), obj.gain(:,2), beta);
+            else
+                G = ones(size(beta)) * obj.gain;
+            end
+            % if outside of defined antenna pattern, -300 dB gain
+            G(isnan(G)) = -300;
+
+            RP = AP + G + obj.As;           % dBW, gain before amps
+            N0 = 10*log10(obj.k * obj.Ts);  % dBW/Hz, noise power spectral density
+            CN0 = RP + obj.Nf + obj.L - N0; % dB*Hz, carrier to noise density ratio
+        end
+    end
 end
 
 % NOTES %

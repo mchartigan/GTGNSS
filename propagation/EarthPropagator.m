@@ -76,7 +76,7 @@ classdef EarthPropagator < OrbitPropagator
             end
         end
 
-       function plot(obj,traj,frame)
+        function plot(obj,traj,frame)
             %PLOT Generates a plot of the provided satellite trajectories in
             %the specified frame.
             %   Input:
@@ -136,6 +136,87 @@ classdef EarthPropagator < OrbitPropagator
             ylabel("y_{"+SUB+"} (km)");
             zlabel("z_{"+SUB+"} (km)");
             title("Satellite trajectories");
+        end
+
+        function fit = AFSfit(obj,traj,n)
+            %MODELFIT Fit the AFS navigation message ephemeris format to the
+            %provided trajectory (not well defined atm lol).
+            arguments
+                obj     (1,1)   EarthPropagator
+                traj    (1,1)   Trajectory
+                n       (1,1)   {mustBeInteger,mustBeNonnegative}
+            end
+
+            diff = n > 0;
+            if ~diff, n = 10; end
+
+            % use chebichev nodes for fitting
+            t0 = traj.t0;
+            span = chebichev(n-1);
+            fit.VP = traj.ts(end) - t0;
+            teval = (span + 1) * fit.VP / 2 + t0;
+            xeval = traj.get(teval, 'J2000');
+            
+            % change to orbital elements
+            as = zeros(1,n); es = zeros(1,n); is = zeros(1,n);
+            RAANs = zeros(1,n); ws = zeros(1,n); fs = zeros(1,n);
+            A_I2ME = zeros(6,n);
+            
+            for k=1:n
+                [as(k),es(k),ik,Ok,wk,fs(k)] = rv2oe(xeval(:,k),obj.pri.GM);
+                % % get perifocal to ICRF rotation matrix
+                % T_P2I = rotz(-Ok) * rotx(-ik) * rotz(-wk);
+                % % get perifocal to MOON ME rotation matrix
+                % T_P2ME = cspice_pxform('J2000', 'MOON_ME', teval(k)) * T_P2I;
+                % [Ok, ik, wk] = cspice_m2eul(T_P2ME, 3, 1, 3);
+                RAANs(k) = Ok;
+                is(k) = ik;
+                ws(k) = wk;
+                T = cspice_sxform('J2000', 'MOON_ME', teval(k));
+                A_I2ME(:,k) = cspice_xf2eul(T,3,1,3);
+            end
+            
+            fit.t_oe = traj.t0;
+            fit.a = mean(as);
+            fit.e = mean(es);
+            fit.i = mean(is);
+            fit.RAAN = mean(RAANs);
+            fit.w = mean(ws);
+            fit.M0 = true2mean(fs(1), fit.e);
+            fit.A = [A_I2ME(1:3,1)' mean(A_I2ME(4:6,:), 2)'];
+            fit.Cx = [];
+            fit.Cy = [];
+            fit.Cz = [];
+
+            % DIFFERENTIAL CORRECTIONS %
+            if diff
+                % get effective Keplerian elements
+                kepmsg = [t0 0 0 0 0 0 0 0 0 fit.t_oe ...
+                          fit.a fit.e fit.i fit.RAAN fit.w fit.M0 fit.A];
+    
+                xbase = zeros(6,n);
+                for k=1:n
+                    [temp,T_J2ME] = RadiometricObsSim.geteph(teval(k), 0, kepmsg);
+                    T_ME2J = [T_J2ME(1:3,1:3)' zeros(3)
+                              T_J2ME(4:6,1:3)' T_J2ME(4:6,4:6)'];
+                    % geteph() returns MOON_ME, so rotate back
+                    xbase(:,k) = T_ME2J * temp(1:6);
+                end
+                % state error
+                dx = xeval - xbase;
+        
+                % compute coefficients for basis and generate model function
+                % % polynomial basis
+                % phi = (span').^(0:n-1);
+                % chebyshev basis
+                phi = chebyshev(0:n-1, span);
+                G = pinv(phi) * dx(1:3,:)';
+                fit.Cx = G(:,1)';
+                fit.Cy = G(:,2)';
+                fit.Cz = G(:,3)';
+    
+                % how to compute values: (basis(2*(tau)/dt - 1) * H)
+            end
         end
     end
 end

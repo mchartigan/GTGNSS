@@ -89,6 +89,32 @@ classdef Trajectory < handle
             end
         end
 
+        function r = getpos(obj,t,outframe)
+            %GETPOS Wrapper for Trajectory.get() that returns first 3
+            %elements of state vector only. Typically used to extract only
+            %the position from a position & velocity vector.
+            %   Input:
+            %    - t; time(s) to access
+            %    - outframe; optional, frame to provide data in (if prev.
+            %       specified)
+
+            x = obj.get(t,outframe);
+            r = x(1:3,:);
+        end
+
+        function r = getvel(obj,t,outframe)
+            %GETVEL Wrapper for Trajectory.get() that returns elements 4-6 of
+            %the state vector only. Typically used to extract only the velocity
+            %from a position & velocity vector.
+            %   Input:
+            %    - t; time(s) to access
+            %    - outframe; optional, frame to provide data in (if prev.
+            %       specified)
+
+            x = obj.get(t,outframe);
+            r = x(4:6,:);
+        end
+
         function interp(obj)
             %INTERP Generates the spline interpolation of the trajectory at t.
             obj.pp = spline(obj.ts, obj.xs);

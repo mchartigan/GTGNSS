@@ -30,6 +30,8 @@ classdef NavSatellite < handle
         Pn      (9,9,:) double
         % satellite ID number
         ID      (1,1)   {mustBeInteger,mustBeNonnegative}
+        % central body
+        body    (1,:)   {mustBeText} = 'MOON'
         % should debug info be printed?
         DEBUG   (1,1)
         % various constant error variances
@@ -57,7 +59,7 @@ classdef NavSatellite < handle
     end
     
     methods
-        function obj = NavSatellite(traj,prop,filter,meas,ant,ID,cadence,debug)
+        function obj = NavSatellite(traj,prop,filter,meas,ant,options)
             %NAVSATELLITE Construct a NavSatellite instance.
             %   Inputs:
             %    - traj (2,1) Trajectory; traj(1) is orbit trajectory,
@@ -73,42 +75,50 @@ classdef NavSatellite < handle
             %    - ID; satellite ID (should be unique)
             %    - cadence; navigation message update rate (in s)
             %    - debug; should debug warnings be printed? true/false
-
-            % permit empty instantiation
-            if nargin ~=0
-                % assign instances
-                obj.traj = traj;
-                obj.prop = prop;
-                obj.ant = ant;
-                obj.cadence = cadence;
-                % initialize filter for default case of "none"
-                obj.filter = [];
-    
-                if strcmpi(filter, "const")
-                    % this option is for having a constant navigation uncertainty;
-                    % meas is only required to have a single property, P0, that
-                    % is a 9x9 covariance matrix
-                    if ~all(size(meas.P0) == [9 9])
-                        error("NavSatellite:invalidMeas", ...
-                            "For filter 'const', meas.P0 must be 9x9.");
-                    end
-                    obj.filter.P0 = meas.P0;
-    
-                elseif ~strcmpi(filter, "none")
-                    error("NavSatellite:invalidFilter", ...
-                        'Filter must be "EKF". See documentation.');
-                end
-    
-                obj.ID = ID;
-                if ~debug, warning('off', 'NavSatellite:debug'); end
-                obj.DEBUG = debug;
-
-                % enforce attributes
-                
+            arguments
+                traj    (2,1)   Trajectory = Trajectory()
+                prop    (1,1)   SatellitePropagator = SatellitePropagator()
+                filter  (1,:)   {mustBeText} = "none"
+                meas    (1,1)   struct = struct()
+                ant     (1,1)   TransmitAntenna = TransmitAntenna()
+                options.ID      (1,1)   {mustBeNonnegative,mustBeInteger} = 0
+                options.cadence (1,1)   {mustBePositive} = 7200
+                options.debug   (1,1)   double = false
+                options.body    (1,:)   {mustBeText} = 'MOON'
             end
+            % permit empty instantiation
+
+            % assign instances
+            obj.traj = traj;
+            obj.prop = prop;
+            obj.ant = ant;
+            % initialize filter for default case of "none"
+            obj.filter = [];
+
+            if strcmpi(filter, "const")
+                % this option is for having a constant navigation uncertainty;
+                % meas is only required to have a single property, P0, that
+                % is a 9x9 covariance matrix
+                if ~all(size(meas.P0) == [9 9])
+                    error("NavSatellite:invalidMeas", ...
+                        "For filter 'const', meas.P0 must be 9x9.");
+                end
+                obj.filter.P0 = meas.P0;
+
+            elseif ~strcmpi(filter, "none")
+                error("NavSatellite:invalidFilter", ...
+                    'Filter must be "EKF". See documentation.');
+            end
+
+            % assign options attributes
+            obj.cadence = options.cadence;
+            obj.ID = options.ID;
+            if ~options.debug, warning('off', 'NavSatellite:debug'); end
+            obj.DEBUG = options.debug;
+            obj.body = options.body;
         end
 
-        function [T,dT,AP,msg,err,var] = transmitsignal(obj,ts,user)
+        function [T,dT,CN0,msg,err,var] = transmitsignal(obj,ts,user)
             %TRANSMITSIGNAL Computes the true transmit time (s) and Doppler
             %shift (s/s) between the satellite and the user. Navigation message
             %data necessary to reconstruct measurements is generated. Errors are
@@ -124,7 +134,7 @@ classdef NavSatellite < handle
             %   Output:
             %    - T; transmitter-receiver delay (s)
             %    - dT; transmitter-receiver Doppler (s/s)
-            %    - AP; power at the user antenna, dBW
+            %    - CN0; carrier to noise density ratio, dB-Hz
             %    - msg; struct containing navigation message data
             %    - err; error applied to T and dT
             %    - var; variance of error err
@@ -133,6 +143,15 @@ classdef NavSatellite < handle
                 ts      (1,:)   double
                 user    (1,1)   User
             end
+
+            % create copy of user (shallow, so referenced objects are same unfort)
+            olduser = user;
+            user = copy(user);
+            % adjust user to be relative to obj.body
+            xtemp = user.motion.xs;
+            xtemp = xtemp + ...
+                cspice_spkezr(user.body, user.motion.ts, user.motion.frame, 'NONE', obj.body);
+            user.motion = Trajectory(user.motion.ts, xtemp, user.motion.frame);
 
             % get true measurements
             % run propagator to get trajectory estimate
@@ -147,45 +166,74 @@ classdef NavSatellite < handle
             T  = r  - xc(1,:) - err.clk_prop(1,:);
             dT = dr - xc(2,:) - err.clk_prop(2,:);
 
-            % ANTENNA MASK %
-            AP = obj.txlinkbudget(r);
-            % add transmitter mask to link budget %
-            xuser = user.getstates(ts, 'MOON_ME');
-            xsat  = obj.traj(1).get(tt, 'MOON_ME');
-            % get nadir direction at user at each time step
-            nadir = xuser(1:3,:) ./ sqrt(sum(xuser(1:3,:).^2, 1));
-            % get zenith direction at sat at each time step
-            zenith = -xsat(1:3,:) ./ sqrt(sum(xsat(1:3,:).^2, 1));
-            % compute angle between nadir and satellite
-            tosat = acos(sum(nadir .* los, 1));
-            % compute angle between zenith and user
-            touser = acos(sum(zenith .* -los, 1));
-            % -300 dB if angles are over off-boresight mask angle
-            AP = AP - 300 * (tosat > pi/2 - user.ant.mask);
-            AP = AP - 300 * (touser > pi/2 - obj.ant.mask);
+            % ANTENNA GAIN %
+            % compute transmitter angle %
+            % state of user w.r.t. obj.body
+            xuser = user.getstates(ts, 'J2000');
+            % state of sat w.r.t. obj.body
+            xsat  = obj.traj(1).get(tt, 'J2000');
+            % get User->obj.body direction at each time step
+            u_u1 = -xuser ./ sqrt(sum(xuser.^2, 1));
+            % get nadir direction at sat at each time step
+            u_s1 = -xsat(1:3,:) ./ sqrt(sum(xsat(1:3,:).^2, 1));
+            % compute angle between nadir and user
+            touser = acos(sum(u_s1 .* -los, 1));
+            % compute angle between User->obj.body dir and satellite
+            tosat = acos(sum(u_u1 .* los, 1));
+            % determine received power at user antenna
+            AP = obj.txlinkbudget(r,touser);
+            CN0 = user.ant.getCN0(AP,tosat);
 
             % PLANET INTERSECTION CALCULATION %
-            R = cspice_bodvrd('MOON', 'RADII', 3) * 1e3;
-            R = R(1);           % radius of moon
+            % primary body
+            R1 = cspice_bodvrd(obj.body, 'RADII', 3) * 1e3;
+            R1 = max(R1);       % radius of obj.body, m
+            
             for i=1:length(ts)
-                x_s = xsat(1:3,i);
-                r_s = norm(x_s);
-                r_su = norm(xuser(1:3,i) - x_s);
-                u_us = los(1:3,i);
-                a_sm = asin(R/r_s);
-                a_su = acos(u_us' * x_s / r_s);
-                r_t = sqrt(r_s^2 - R^2);
-                % if the moon center/moon tangent angle from the satellite
-                % POV is bigger than the moon center/sat-user angle and the
-                % range is > moon tangent range, satellite is out of view.
-                if a_su < a_sm && r_su > r_t
+                x_s = xsat(1:3,i);                  % Moon -> sat
+                r_s = norm(x_s);                    % || Moon -> sat ||
+                r_su = norm(xuser(1:3,i) - x_s);    % || sat -> User ||
+                u_us = los(1:3,i);                  % User -> sat
+                a_1st = asin(R1/r_s);               % < body-sat-bodyTangent angle
+                a_1su = acos(u_us' * x_s / r_s);    % < body-sat-User angle
+                r_t = sqrt(r_s^2 - R1^2);           % || sat -> bodyTangent ||
+                % if the body center/body tangent angle from the sat
+                % POV is bigger than the body center/user angle and the
+                % range is > body tangent range, sat is out of view.
+                if a_1su < a_1st && r_su > r_t
                     T(i)  = NaN;
                     dT(i) = NaN;
+                    CN0(i) = CN0(i) - 300;
+                end
+            end
+
+            % evaluate second body intersection if user and satellite
+            % aren't around the same central body
+            if ~strcmpi(obj.body, user.body)
+                % user trajectory relative to its own central body
+                xuser = olduser.getstates(ts, 'J2000');
+                % secondary body
+                R2 = cspice_bodvrd(user.body, 'RADII', 3) * 1e3;
+                R2 = max(R2);       % radius of user.body, m
+
+                for i=1:length(ts)
+                    r_u2 = norm(xuser(1:3,i));      % || User -> body ||
+                    a_2ut = asin(R2/r_u2);          % < body-User-bodyTangent angle
+                    % < body-User-sat angle
+                    a_2us = acos(los(1:3,i)' * -xuser(1:3,i) / r_u2);
+                    % if the body center/body tangent angle from the user POV
+                    % is bigger than the body center/sat angle, sat is out of 
+                    % view. Assumes sat is further away than body.
+                    if a_2us < a_2ut
+                        T(i)  = NaN;
+                        dT(i) = NaN;
+                        CN0(i) = CN0(i) - 300;
+                    end
                 end
             end
         end
 
-        function [T,dT,AP,msg,err,var] = transmitearthsignal(obj,ts,user)
+        function [T,dT,CN0,msg,err,var] = transmitearthsignal(obj,ts,user)
             %TRANSMITEARTHSIGNAL Computes the true transmit time (s) and Doppler
             %shift (s/s) between the satellite and the user. Navigation message
             %data necessary to reconstruct measurements is generated. Errors are
@@ -201,7 +249,7 @@ classdef NavSatellite < handle
             %   Output:
             %    - T; transmitter-receiver delay (s)
             %    - dT; transmitter-receiver Doppler (s/s)
-            %    - AP; power at the user antenna, dBW
+            %    - CN0; carrier to noise density ratio, dB-Hz
             %    - msg; struct containing navigation message data
             %    - err; error applied to T and dT
             %    - var; variance of error err
@@ -224,42 +272,60 @@ classdef NavSatellite < handle
             T  = r  - xc(1,:) - err.clk_prop(1,:);
             dT = dr - xc(2,:) - err.clk_prop(2,:);
 
-            % ANTENNA MASK %
-            AP = obj.txlinkbudget(r);
-            % add transmitter mask to link budget %
-            xuser = user.getstates(ts, 'MOON_ME');
-            xsat  = obj.traj(1).get(tt, 'MOON_ME');
-            % get nadir direction at user at each time step
-            nadir = xuser(1:3,:) ./ sqrt(sum(xuser(1:3,:).^2, 1));
-            % get zenith direction at sat at each time step
-            zenith = -xsat(1:3,:) ./ sqrt(sum(xsat(1:3,:).^2, 1));
-            % compute angle between nadir and satellite
-            tosat = acos(sum(nadir .* los, 1));
-            % compute angle between zenith and user
-            touser = acos(sum(zenith .* -los, 1));
-            % -300 dB if angles are over off-boresight mask angle
-            AP = AP - 300 * (tosat > pi/2 - user.ant.mask);
-            AP = AP - 300 * (touser > pi/2 - obj.ant.mask);
+            
 
             % PLANET INTERSECTION CALCULATION %
             R = cspice_bodvrd('MOON', 'RADII', 3) * 1e3;
             R = R(1);           % radius of moon
+            Re = cspice_bodvrd('EARTH', 'RADII', 3) * 1e3;
+            Re = max(Re) + 1e6;
             for i=1:length(ts)
-                x_s = xsat(1:3,i);
-                r_s = norm(x_s);
-                r_su = norm(xuser(1:3,i) - x_s);
-                u_us = los(1:3,i);
-                a_sm = asin(R/r_s);
-                a_su = acos(u_us' * x_s / r_s);
-                r_t = sqrt(r_s^2 - R^2);
-                % if the moon center/moon tangent angle from the satellite
-                % POV is bigger than the moon center/sat-user angle and the
-                % range is > moon tangent range, satellite is out of view.
-                if a_su < a_sm && r_su > r_t
+                x_s = xsat(1:3,i);                  % Moon -> GNSS
+                r_s = norm(x_s);                    % || Moon -> GNSS ||
+                r_su = norm(xuser(1:3,i) - x_s);    % || GNSS -> User ||
+                u_us = los(1:3,i);                  % User -> GNSS
+                a_mst = asin(R/r_s);                % < Moon-GNSS-MoonTangent angle
+                a_msu = acos(u_us' * x_s / r_s);    % < Moon-GNSS-User angle
+                r_t = sqrt(r_s^2 - R^2);            % || GNSS -> MoonTangent ||
+                % if the moon center/moon tangent angle from the GNSS
+                % POV is bigger than the moon center/user angle and the
+                % range is > moon tangent range, GNSS is out of view.
+                if a_msu < a_mst && r_su > r_t
                     T(i)  = NaN;
                     dT(i) = NaN;
+                    CN0(i) = CN0(i) - 300;
+                end
+
+                r_ue = norm(x_ue(:,i));         % || User -> Earth ||
+                a_eut = asin(Re/r_ue);          % < Earth-User-EarthTangent angle
+                % < Earth-User-GNSS angle
+                a_eus = acos(u_us' * x_ue(:,i) / r_ue);
+                r_t2 = sqrt(r_ue^2 - Re^2);     % || User -> EarthTangent ||
+                % if the earth center/earth tangent angle from the user POV
+                % is bigger than the earth center/GNSS angle and the range
+                % is > earth tangent range, GNSS is out of view
+                if a_eus < a_eut && r_su > r_t2
+                    T(i)  = NaN;
+                    dT(i) = NaN;
+                    CN0(i) = CN0(i) - 300;
                 end
             end
+
+            figure();
+            plotformat("APA", 0.6);
+            yyaxis left;
+            tplot = (ts - ts(1)) / 60;
+            plot(tplot, touser * 180/pi);
+            hold on;
+            plot(tplot, tosat * 180/pi);
+            hold off;
+            xlabel("Time (min)");
+            ylabel("Angle (deg)");
+            legend(["GNSS Boresight", "User Boresight"], location="best");
+
+            yyaxis right;
+            plot(tplot, CN0);
+            ylabel("C/N0 (dB-Hz)");
         end
 
         function [err,var,msg,los,bias] = getSISE(obj,tt,ts,user)
@@ -500,23 +566,25 @@ classdef NavSatellite < handle
                    eph.A eph.VP eph.Cx eph.Cy eph.Cz];
         end
 
-        function AP = txlinkbudget(obj,r)
+        function AP = txlinkbudget(obj,r,beta)
             %TXLINKBUDGET Computes the received power at the user antenna.
             %   Input:
             %    - user; User object instance
             %    - r; transmitter-receiver ranges (m)
+            %    - beta; transmitter-user angle (rad)
             %   Output:
             %    - AP; power at the user antenna, dBW
             arguments
                 obj     (1,1)   NavSatellite
                 r       (1,:)   double {mustBePositive}
+                beta    (1,:)   double
             end
 
             % link budget calculations to obtain C/N0
             freq = obj.ant.freq;
             Ad = 20 * log10((obj.c/freq)./(4*pi*r));    % dB, FSPL
             Ae = 0;                                     % dB, no atmospheric attenuation
-            AP = obj.ant.P + obj.ant.gain + Ad + Ae;    % dBW, gain before receiver
+            AP = obj.ant.getEIRP(beta) + Ad + Ae;       % dBW, gain before receiver
         end
 
         function [tt,r,dr] = timeofflight(obj,ts,user,tol)

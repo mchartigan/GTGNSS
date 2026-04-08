@@ -73,13 +73,11 @@
             var = cell(obj.nsats,1);
             err = cell(obj.nsats,1);
             R = zeros(obj.dim,obj.dim,n);
-            CN0 = zeros(obj.nsats,n);
 
             for i=1:obj.nsats
                 % FIELD INCOMING MEASUREMENTS -- y_raw(ts) %
-                [T,dT,AP,msg,err1,var1] = obj.sats(i).transmitsignal(ts, obj.user);
-                CN0(i,:) = obj.user.rx.rxlinkbudget(AP);
-                [y_raw,~,var2] = obj.user.rx.tracksat(ts, T, dT, AP);
+                [T,dT,CN0,msg,err1,var1] = obj.sats(i).transmitsignal(ts, obj.user);
+                [y_raw,~,var2] = obj.user.rx.tracksat(ts, T, dT, CN0);
                 obj.msgs = [obj.msgs; msg];
 
                 % MERGE VARIANCES %

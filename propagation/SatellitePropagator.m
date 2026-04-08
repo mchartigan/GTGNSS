@@ -28,8 +28,8 @@ classdef SatellitePropagator < Propagator
             %    - clock; clock propagator representative of what's onboard
             %    - imu; IMU instance, if satellite is inertially aided
             arguments
-                orbit           (1,1)   OrbitPropagator
-                clock           (1,1)   Clock
+                orbit           (1,1)   OrbitPropagator = OrbitPropagator(1)
+                clock           (1,1)   Clock = Clock("none",zeros(4,1))
                 imu             (1,1)   IMU = IMU()
                 options.flight  (1,1)   = 0
                 options.tol     (1,1)   double {mustBePositive} = 1e-5
