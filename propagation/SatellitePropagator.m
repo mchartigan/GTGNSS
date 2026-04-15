@@ -20,6 +20,8 @@ classdef SatellitePropagator < Propagator
         nbias   (1,1)   {mustBeInteger,mustBeNonnegative} = 0
         % central body
         body    (1,:)   {mustBeText} = 'MOON'
+        % option to add relativistic corrections
+        rel     (1,1)   {mustBeNonnegative,mustBeInteger} = 0
     end
 
     methods
@@ -37,6 +39,7 @@ classdef SatellitePropagator < Propagator
                 options.tol     (1,1)   double {mustBePositive} = 1e-5
                 options.bias    (1,:)   Propagator = RandomRun.empty
                 options.body    (1,:)   {mustBeText} = 'MOON'
+                options.rel     (1,1)   = 0
             end
             
             obj.orbit = orbit;
@@ -44,6 +47,7 @@ classdef SatellitePropagator < Propagator
             obj.imu = imu;
             obj.flight = options.flight;
             obj.body = options.body;
+            obj.rel = options.rel;
 
             if obj.flight
                 % compute RK4 step size. Since alg error is O(h^5), solve for h
@@ -116,6 +120,12 @@ classdef SatellitePropagator < Propagator
                 end
             end
             xs(7:9,:) = obj.clock.runat(ts,x0(7:9),noise);
+
+            % apply relativistic time corrections to propagation
+            if obj.rel
+                temp = obj.orbit.propertimestep(ts,xs) * obj.clock.norm;
+                xs(7:9,:) = xs(7:9,:) + temp;
+            end
 
             k = 9;
             for i=1:obj.nbias

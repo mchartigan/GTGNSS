@@ -144,22 +144,30 @@
                 end
             end
 
-            % plot CN0
-            tplot = (ts - ts(1)) / 60;
-            figure();
-            plotformat("APA", 0.5);
-            % styles = {'-', '--', '-.', ':'};
-            plot(0, 0, color='none');
-            hold on;
-            for i=1:obj.nsats
-                valid = CN0(i,:) > 0;
-                plot(tplot(valid), CN0(i,valid), LineWidth=2);
-            end
-            hold off; grid on;
-            axis([tplot(1) tplot(end) 0 50]);
-            xlabel("Time (mins)");
-            ylabel("C/N0 (dB-Hz)");
-            title("Receiver CN0 for each LDN link");
+            % % plot CN0
+            % tplot = (ts - ts(1)) / 60;
+            % figure();
+            % plotformat("APA", 0.5);
+            % % styles = {'-', '--', '-.', ':'};
+            % plot(0, 0, color='none');
+            % hold on;
+            % for i=1:obj.nsats
+            %     valid = CN0(i,:) > 0;
+            %     plot(tplot(valid), CN0(i,valid), LineWidth=2);
+            % end
+            % hold off; grid on;
+            % axis([tplot(1) tplot(end) 0 50]);
+            % xlabel("Time (mins)");
+            % ylabel("C/N0 (dB-Hz)");
+            % title("Receiver CN0 for each LDN link");
+            % 
+            % % plot # links?
+            % figure();
+            % plotformat("APA", 0.5);
+            % num = sum(CN0 > 0, 1);
+            % plot(tplot, num);
+            % xlabel("Time (mins)");
+            % ylabel("# sats w/ CN0 > 0");
         end
 
         function [y,xs] = computemeas(obj,tr,x,tprev,xprev)
@@ -170,12 +178,25 @@
             %       seconds past J2000
             %    - x; (best est. of) state of SAT at time t in MOON_ME
             %       [pos (km); vel (km/s); t bias (s); drift (s/s); rate (s/s^2)]
-            arguments
-                obj     (1,1)   RadiometricObsSim
-                tr      (1,1)   double
-                x       (:,:)   double
-                tprev   (1,1)   double = NaN
-                xprev   (:,:)   double = zeros(9,1)
+            % arguments
+            %     obj     (1,1)   RadiometricObsSim
+            %     tr      (1,1)   double
+            %     x       (:,:)   double
+            %     tprev   (1,1)   double = NaN
+            %     xprev   (:,:)   double = zeros(9,1)
+            % end
+
+            % adjust if sats aren't around same body as user
+            if ~strcmpi(obj.user.body, obj.sats(1).prop.body)
+                x(1:6) = x(1:6) + cspice_spkezr(obj.user.body, tr, ...
+                    obj.frame, 'NONE', obj.sats(1).prop.body) * ...
+                    obj.sats(1).prop.orbit.unit;
+
+                if nargin > 3
+                    xprev(1:6) = xprev(1:6) + cspice_spkezr(obj.user.body, ...
+                        tprev, obj.frame, 'NONE', obj.sats(1).prop.body) * ...
+                        obj.sats(1).prop.orbit.unit;
+                end
             end
 
             r_u = x(1:3);           % user position
@@ -189,7 +210,8 @@
                 % find transmission time w.r.t meas, based on nav msg knowledge
                 % of satellite states
                 tt = obj.timeofflight(tr,x(1:9),obj.sats(i).ID,obj.msgs);
-                [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
+                [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                    obj.sats(1).prop.orbit.pri.GM);
                 % rotate to inertial if that's how we're managing things
                 if strcmp(obj.frame, 'J2000')
                     x_s(1:6) = cspice_invstm(T) * x_s(1:6);
@@ -215,14 +237,15 @@
                 end
 
                 % m, pseudorange (PLL)
-                if obj.user.rx.PLL && ~isnan(tprev)
+                if obj.user.rx.PLL && nargin > 3
                     y(i + obj.nsats) = rho + x(7) - x_s(7);
 
                     % compute previous pseudorange and difference them
                     % find transmission time w.r.t meas, based on nav msg knowledge
                     % of satellite states
                     tt = obj.timeofflight(tprev,xprev(1:9),obj.sats(i).ID,obj.msgs);
-                    [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
+                    [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                        obj.sats(1).prop.orbit.pri.GM);
                     % rotate to inertial if that's how we're managing things
                     if strcmp(obj.frame, 'J2000')
                         x_s(1:6) = cspice_invstm(T) * x_s(1:6);
@@ -260,12 +283,25 @@
             %       seconds past J2000
             %    - x; (best est. of) state of USER at time t in MOON_ME
             %       [pos (km); vel (km/s); t bias (s); drift (s/s); rate (s/s^2)]
-            arguments
-                obj     (1,1)   RadiometricObsSim
-                tr      (1,:)   double
-                x       (:,:)   double
-                tprev   (1,1)   double = NaN
-                xprev   (:,:)   double = zeros(9,1)
+            % arguments
+            %     obj     (1,1)   RadiometricObsSim
+            %     tr      (1,:)   double
+            %     x       (:,:)   double
+            %     tprev   (1,1)   double = NaN
+            %     xprev   (:,:)   double = zeros(9,1)
+            % end
+
+            % adjust if sats aren't around same body as user
+            if ~strcmpi(obj.user.body, obj.sats(1).prop.body)
+                x(1:6) = x(1:6) + cspice_spkezr(obj.user.body, tr, ...
+                    obj.frame, 'NONE', obj.sats(1).prop.body) * ...
+                    obj.sats(1).prop.orbit.unit;
+
+                if nargin > 3
+                    xprev(1:6) = xprev(1:6) + cspice_spkezr(obj.user.body, ...
+                        tprev, obj.frame, 'NONE', obj.sats(1).prop.body) * ...
+                        obj.sats(1).prop.orbit.unit;
+                end
             end
 
             r_u = x(1:3);           % user position
@@ -279,7 +315,8 @@
                 % find transmission time w.r.t meas, based on nav msg knowledge
                 % of satellite states
                 tt = obj.timeofflight(tr,x(1:9),obj.sats(i).ID,obj.msgs);
-                [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
+                [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                    obj.sats(1).prop.orbit.pri.GM);
                 % rotate to inertial if that's how we're managing things
                 if strcmp(obj.frame, 'J2000')
                     x_s(1:6) = cspice_invstm(T) * x_s(1:6);
@@ -304,13 +341,14 @@
                         [(dr'*dvdr/rho^3 - dv'/rho) -dr'/rho 0 1 0];
                 end
                 % m, pseudorange (PLL)
-                if obj.user.rx.PLL && ~isnan(tprev)
+                if obj.user.rx.PLL && nargin > 3
                     H(i + obj.nsats,1:9) = [-dr'/rho 0 0 0 1 0 0];
 
                     % find transmission time w.r.t meas, based on nav msg knowledge
                     % of satellite states
                     tt = obj.timeofflight(tprev,xprev(1:9),obj.sats(i).ID,obj.msgs);
-                    [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs);
+                    [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                        obj.sats(1).prop.orbit.pri.GM);
                     % rotate to inertial if that's how we're managing things
                     if strcmp(obj.frame, 'J2000')
                         x_s(1:6) = cspice_invstm(T) * x_s(1:6);
@@ -351,17 +389,19 @@
             %    - ID; ID # of satellite to find
             %    - msg; matrix of navigation message data
             %    - tol; iteration tolerance for solving transmission time
-            arguments
-                obj     (1,1)   RadiometricObsSim
-                tr      (1,1)   double
-                user    (9,1)   double
-                ID      (1,1)   {mustBeInteger,mustBeNonnegative}
-                msg     (:,:)   double
-                tol     (1,1)   double = 1e-10
-            end
+            % arguments
+            %     obj     (1,1)   RadiometricObsSim
+            %     tr      (1,1)   double
+            %     user    (9,1)   double
+            %     ID      (1,1)   {mustBeInteger,mustBeNonnegative}
+            %     msg     (:,:)   double
+            %     tol     (1,1)   double = 1e-10
+            % end
+
+            if nargin < 6, tol = 1e-10; end
 
             % initial guess at signal time-of-flight
-            [xSV,T] = obj.geteph(tr, ID, msg);
+            [xSV,T] = obj.geteph(tr, ID, msg, obj.sats(1).prop.orbit.pri.GM);
             % rotate to inertial if that's how we're managing things
             if strcmp(obj.frame, 'J2000')
                 xSV(1:6) = cspice_invstm(T) * xSV(1:6);
@@ -372,7 +412,7 @@
             for i=1:10
                 tt = tr - dt_old;           % time offset guess
                 % updated time-of-flight guess
-                [xSV,T] = obj.geteph(tt, ID, msg);
+                [xSV,T] = obj.geteph(tt, ID, msg, obj.sats(1).prop.orbit.pri.GM);
                 % rotate to inertial if that's how we're managing things
                 if strcmp(obj.frame, 'J2000')
                     xSV(1:6) = cspice_invstm(T) * xSV(1:6);
@@ -495,7 +535,7 @@
     end
 
     methods (Static)
-        function [x,T] = geteph(t,ID,msg)
+        function [x,T] = geteph(t,ID,msg,GM)
             %GETEPH Read the navigation message and return the satellite
             %ephemeris at time t.
             %   Input:
@@ -506,6 +546,8 @@
             %   Output:
             %    - x; satellite state at time t
             %       [pos (km); vel (km/s); t bias (s); drift (s/s); rate (s/s^2)]
+
+            if nargin < 4, GM = RadiometricObsSim.GM; end
 
             % find line
             for line=size(msg,1):-1:1
@@ -524,11 +566,11 @@
             RAAN = msg(14);                     % rad, right ascension
             i  = msg(13);                       % rad, inclination
             w = msg(15);                        % rad, arg. of perilune
-            n = sqrt(RadiometricObsSim.GM/msg(11)^3);   % rad/s, mean motion
+            n = sqrt(GM/msg(11)^3);             % rad/s, mean motion
             M = msg(16) + n*tau;                % rad, mean anomaly
             [f, ~] = mean2true(M, msg(12));     % rad, true anomaly
             
-            x = oe2rv(msg(11), msg(12), i, RAAN, w, f, RadiometricObsSim.GM);
+            x = oe2rv(msg(11), msg(12), i, RAAN, w, f, GM);
             % get rotation matrix from inertial to body-fixed
             eul = msg(17:22)';
             eul(1:3) = eul(1:3) + eul(4:6) * tau;

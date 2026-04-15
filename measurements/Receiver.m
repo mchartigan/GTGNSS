@@ -51,6 +51,8 @@ classdef Receiver < handle
         T_PLL         (1,1)   double {mustBePositive} = 0.002
         T_FLL         (1,1)   double {mustBePositive} = 0.002
 
+        % dB-Hz, optional acquisition and tracking thresholds
+        threshold     (1,:)   double = []
     end
 
     properties (Constant)
@@ -59,22 +61,28 @@ classdef Receiver < handle
     end
 
     methods
-        function obj = Receiver(clock,PLL,FLL)
+        function obj = Receiver(clock,PLL,FLL,options)
             %RECEIVER Creates a Receiver instance. Specify at least the
             %carrier tracking loop type (or "none").
             %   Input:
             %    - clock; receiver Clock object
             %    - PLL; flag indicating if receiver has phase locked loop
             %    - FLL; flag if receiver has frequency locked loop
+            %    - threshold; (optional name-value pair) signal acquisition and
+            %       tracking thresholds, in dB-Hz; can either be a double or a
+            %       2-element list of doubles, where larger value is
+            %       acquisition threshold
             arguments
                 clock   (1,1)   Clock = Clock("none", zeros(4,1))
                 PLL     (1,1)   = false
                 FLL     (1,1)   = false
+                options.threshold   (1,:)   double = []
             end
 
             obj.clock = clock;
             obj.PLL = PLL;
             obj.FLL = FLL;
+            obj.threshold = options.threshold;
         end
 
         function [y,err,var] = tracksat(obj,ts,T,dT,CN0)
@@ -87,13 +95,13 @@ classdef Receiver < handle
             %    - CN0; received carrier to noise density ratio, dB-Hz
             %   Output:
             %    - y; returned measurements of signal. For DLL, y(1,:) is
-            %         the measured transmission delay in s. If PLL, y(2,:) is
-            %         the carrier phase (w/ integer ambiguity) in s. If FLL,
-            %         y(3,:) is the Doppler shift in s/s.
+            %       the measured transmission delay in s. If PLL, y(2,:) is
+            %       the carrier phase (w/ integer ambiguity) in s. If FLL,
+            %       y(3,:) is the Doppler shift in s/s.
             %    - err; random zero-mean variables with variance vrec,
-            %           first row is range (m) and second is range-rate (m/s)
+            %       first row is range (m) and second is range-rate (m/s)
             %    - var; variance of range (m^2) and range-rate
-            %           measurements (m^2/s^2)
+            %       measurements (m^2/s^2)
             arguments
                 obj         (1,1)   Receiver
                 ts          (1,:)   double
@@ -102,6 +110,7 @@ classdef Receiver < handle
                 CN0         (1,:)   double
             end
 
+            CN0_dB = CN0;
             CN0 = 10.^(CN0/10);                 % Hz, converted from dB-Hz for below equations
             Tc = 1/obj.Rc;                      % s (or s/chip), chip period
 
@@ -270,9 +279,45 @@ classdef Receiver < handle
             end
             % apply noise to measurements
             y = y + err;
+
+            % create tracking masks
+            if isempty(obj.threshold)
+                % if no acquisition / track thresholds specified, use
+                % theoretical behavior
+                mask = track;
+
+            elseif isscalar(obj.threshold)
+                % if single value provided, use as both acquisition and
+                % track threshold
+                mask = repmat(CN0_dB < obj.threshold, 3, 1);
+
+            elseif length(obj.threshold) == 2
+                % if two values provided, larger is acquisition threshold
+                % and smaller is tracking threshold
+                acq = max(obj.threshold); track = min(obj.threshold);
+
+                mask = zeros(1,n);
+
+                % All time steps w/ CN0 > acq automatically track, steps w/
+                % CN0 > track but < acq only track if prev time step tracked
+                for i=1:n
+                    if CN0_dB(i) >= acq
+                        mask(i) = 1;
+                    elseif CN0_dB(i) >= track && i > 1 && mask(i-1) ~= 0
+                        mask(i) = 1;
+                    end
+                end
+
+                mask = repmat(mask > 0, 3, 1);
+
+            else
+                error("tracksat:tooManyArgs", ...
+                    "threshold should be a maximum of 2 arguments.");
+            end
+
             % mask out invalid measurements
-            y(~track) = NaN;
-            var.total(~track) = NaN;
+            y(~mask) = NaN;
+            var.total(~mask) = NaN;
         end
     end
 end

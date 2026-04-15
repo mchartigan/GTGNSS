@@ -33,7 +33,7 @@ classdef OrbitPropagator < Propagator
         % CT velocity process noise in the RTN frame
         Qrtn    (3,3)   double = zeros(3,3)
     end
-    properties (Access=protected)
+    properties (SetAccess=protected)
         % precomputed factorial for harmonics calculations %
         fact (:,:) = 0
         % solar radiation pressure constants %
@@ -50,10 +50,19 @@ classdef OrbitPropagator < Propagator
         Rm   = 1737.4
         % unit multiplier (1e3 if m, 1 if km)
         unit = 1
-        % TDB-TCB rate coefficient
-        L_B  = 1.550519768e-8
         % m/s, speed of light
         c    = 299792458
+        % relativity constants %
+        % consider all major planets for gravitational potential
+        % MERCURY BARYCENTER (1)  SATURN BARYCENTER (6)   MERCURY (199)
+        % VENUS BARYCENTER (2)    URANUS BARYCENTER (7)   VENUS (299)
+        % EARTH BARYCENTER (3)    NEPTUNE BARYCENTER (8)  MOON (301)
+        % MARS BARYCENTER (4)     PLUTO BARYCENTER (9)    EARTH (399)
+        % JUPITER BARYCENTER (5)  SUN (10)
+        np   = [10 399 301 299 5 6 4 199 7 8]
+        GMs  (1,:) double = []
+        % TDB-TCB rate coefficient
+        L_B  = 1.550519768e-8
     end
     
     methods
@@ -65,7 +74,7 @@ classdef OrbitPropagator < Propagator
             %    - Cr; optional name-value arg, coefficient of reflectivity
             %       for computing solar radiation pressure
             %    - A/m; optional name-value arg, area-to-mass ratio for
-            %       computing solar radiation pressure
+            %       computing solar radiation pressure in m^2/kg
             %    - preallocate; optional name-value arg, used to
             %       preallocate transformation matrices so SPICE isn't called
             %       during propagation. Can be used to speed up (maybe?)
@@ -87,14 +96,17 @@ classdef OrbitPropagator < Propagator
             obj.ord = ord;
             obj.opts = options.opts;
             obj.Cr = options.Cr;
-            obj.Am = options.Am;
+            obj.Am = options.Am / 1e9;  % convert from m^2/kg to km^2/kg
             obj.pre = options.pre;
             obj.t_pre = [];
 
             if strcmpi(options.units, "m")
                 obj.AU = obj.AU * 1e3;
+                obj.Rs = obj.Rs * 1e3;
                 obj.Re = obj.Re * 1e3;
                 obj.Rm = obj.Rm * 1e3;
+                obj.Am = obj.Am * 1e9;
+                obj.Ps = obj.Ps * 1e3;
                 obj.unit = 1e3;
             elseif ~strcmpi(options.units, "km")
                 error("OrbitPropagator:invalidUnit", ...
@@ -105,6 +117,8 @@ classdef OrbitPropagator < Propagator
             n = 1:ord+1; m = 1:ord+1;
             m = m(2:end);
             obj.fact = factorial(abs(n'-m+2))./factorial(abs(n'-m));
+
+            obj.GMs  = arrayfun(@(x) cspice_bodvrd(num2str(x), 'GM', 1), obj.np);
         end
         
         function [ts,xs,fail] = run(obj,ts,x0,n,frame)
@@ -561,18 +575,9 @@ classdef OrbitPropagator < Propagator
             x_sc = traj.get(t, 'J2000');
             traj = Trajectory(t, x_sc + x_SSB, 'J2000');
 
-            % consider all major planets for gravitational potential
-            % MERCURY BARYCENTER (1)  SATURN BARYCENTER (6)   MERCURY (199)
-            % VENUS BARYCENTER (2)    URANUS BARYCENTER (7)   VENUS (299)
-            % EARTH BARYCENTER (3)    NEPTUNE BARYCENTER (8)  MOON (301)
-            % MARS BARYCENTER (4)     PLUTO BARYCENTER (9)    EARTH (399)
-            % JUPITER BARYCENTER (5)  SUN (10)
-            np = [10 399 301 299 5 6 4 199 7 8];
-            GMs = arrayfun(@(x) cspice_bodvrd(num2str(x), 'GM', 1), np);
-
             % compute integral
             relrate = @(p) obj.integrand(p, @(q) traj.getpos(q,'J2000'), ...
-                @(q) traj.getvel(q,'J2000'), np, GMs);
+                @(q) traj.getvel(q,'J2000'), obj.np, obj.GMs);
             relint = zeros(size(t));
             for i=2:n
                 relint(i) = relint(i-1) + integral(relrate, t(i-1), t(i), RelTol=1e-11);
@@ -580,6 +585,44 @@ classdef OrbitPropagator < Propagator
 
             tau = obj.L_B/(1 - obj.L_B)*(t - t0) - 1/(1 - obj.L_B)/obj.c^2 * relint;
             rate = 1/(1 - obj.L_B) * (1 - 1/obj.c^2*relrate(t));
+        end
+
+        function x_rel = propertimestep(obj,ts,xs)
+            %PROPERTIMESTEP Determine the change in proper time rate and
+            %proper time from TDB over the interval (from start).
+            %   Input:
+            %    - ts; times (s), ideally TDB estimate
+            %    - xs; states, in J2000
+            %   Output:
+            %    - x_rel; adjustment to clock bias, drift, and aging due to
+            %       relativity (s)
+            
+            n = length(ts);
+            d_rel = zeros(1,n);
+            x_rel = zeros(3,n);
+
+            for i=1:n
+                ssb = cspice_spkezr(obj.pri.name,ts(i),'J2000','NONE','SSB');
+                r = xs(1:3,i) / obj.unit + ssb(1:3);
+                v = xs(4:6,i) / obj.unit + ssb(4:6);
+
+                U = sum(v.^2) / 2;
+
+                % planetary contributions
+                for j=1:length(obj.np)
+                    U = U + obj.GMs(j) ./ sqrt(sum((cspice_spkpos(...
+                        num2str(obj.np(j)), ts(i), 'J2000', 'NONE', 'SSB') ...
+                        - r).^2, 1));
+                end
+
+                d_rel(i) = -1 / (1-obj.L_B) / obj.c^2 * U * 1e6;
+
+                if i ~= 1
+                    dt = ts(i) - ts(i-1);
+                    phi = [1 dt 0; 0 1 0; 0 0 0];
+                    x_rel(:,i) = phi*x_rel(:,i-1) + [dt/2; 1; 0] * (d_rel(i) - d_rel(i-1));
+                end
+            end
         end
 
         function plotelements(obj,traj,frame)
@@ -741,8 +784,8 @@ classdef OrbitPropagator < Propagator
             %proper time - TDB difference.
             %   Input:
             %    - t; time(s) (in TDB)
-            %    - r; position function of LDN spacecraft
-            %    - v; velocity function of LDN spacecraft
+            %    - r; position function of LDN spacecraft (km)
+            %    - v; velocity function of LDN spacecraft (km/s)
             %    - planets; integer IDs of planets to consider
             %    - GMs; gravitational parameters of planets
         

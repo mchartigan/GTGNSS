@@ -408,7 +408,8 @@ classdef NavSatellite < handle
     
                     % compute model states and all errors/variances
                     for k=find(jj)
-                        [xmdl(:,k),T] = RadiometricObsSim.geteph(tt(k), obj.ID, msg(i,:));
+                        [xmdl(:,k),T] = RadiometricObsSim.geteph(tt(k), ...
+                            obj.ID, msg(i,:), obj.prop.orbit.pri.GM);
     
                         % rotate to inertial since that's where we're handling
                         xmdl(1:6,k) = T \ xmdl(1:6,k);

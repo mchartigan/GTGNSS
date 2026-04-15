@@ -16,6 +16,10 @@ classdef dsEKF < handle
         s      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of steps in t
         prop   (1,1)   Propagator = OrbitPropagator(1)          % describes system dynamics
         meas   (1,1)   Measurement = EmptyMeasurement()         % describes system<->measurement interface
+
+        % DEBUG ONLY PROPERTY %
+        % truth trajectory so we can compare during execution
+        truth   (1,1)   User
     end
     
     methods
@@ -100,7 +104,7 @@ classdef dsEKF < handle
                     yj = obj.y(:,j);                % get state measurement
                     mask = ~isnan(yj);              % generate mask of any NaN
 
-                    if k == 622
+                    if sum(mask) > 0
                         0;
                     end
                     % get computed measurement from Measurement model
