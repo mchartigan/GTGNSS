@@ -92,7 +92,7 @@ classdef SatellitePropagator < Propagator
             xs = obj.runat(ts,x0,frame,noise);
         end
 
-        function xs = runat(obj,ts,x0,frame,noise)
+        function [xs,d_rel] = runat(obj,ts,x0,frame,noise)
             %RUNAT Propagate the provided states over the provided time steps. 
             %Data returned in indicated frame.
             %   Input:
@@ -123,8 +123,8 @@ classdef SatellitePropagator < Propagator
 
             % apply relativistic time corrections to propagation
             if obj.rel
-                temp = obj.orbit.propertimestep(ts,xs) * obj.clock.norm;
-                xs(7:9,:) = xs(7:9,:) + temp;
+                [temp, d_rel] = obj.orbit.propertimestep(ts,xs);
+                xs(7:9,:) = xs(7:9,:) + temp * obj.clock.norm;
             end
 
             k = 9;

@@ -111,28 +111,48 @@ classdef dsEKF < handle
                     ycomp = obj.meas.computemeas(tk,x_,tprev,xprev);
                     Y = yj - ycomp;                 % measurement residual (O - C)
                     Y = Y(mask);                    % mask out invalid meas
-                    % measurement partials matrix
-                    [H,J] = obj.meas.measpartials(tk,x_,tprev,xprev);
-                    H = H(mask,:);                  % mask out invalid meas
-                    J = J(mask,:);
                     % get appropriate measurement noise
                     if size(obj.R, 3) > 1       % time-varying
                         Rk = obj.R(:,:,j);
                     else                        % time-invariant
                         Rk = obj.R(:,:);
                     end
-
-                    % underweight the pseudorange measurements
-                    % ns = length(mask);
-                    % Rk(mask(1:ns/3),mask(1:ns/3)) = Rk(mask(1:ns/3),mask(1:ns/3));
-                    % Rk(mask(ns/3+1:end),mask(ns/+1:end)) = Rk(mask(ns/3+1:end),mask(ns/+1:end));
                     Rk = Rk(mask,mask);
-                    
+
+                    % measurement partials matrix
+                    [H,J] = obj.meas.measpartials(tk,x_,tprev,xprev);
+                    H = H(mask,:);                  % mask out invalid meas
+                    J = J(mask,:);                    
+
+                    tic
                     % post-fit est. error covariance
                     L = H*P_*H' + Rk + J*Pprev*Phi'*H' + H*Phi*Pprev*J' + J*Pprev*J';
                     K = (P_*H' + Phi*Pprev*J') / L; % Kalman gain
                     obj.x(:,k) = x_ + K*Y;          % post-fit state estimate
                     obj.P(:,:,k) = P_ - K*L*K';
+
+                    % SLOWER BUT THE SAME %
+                    % % Tara's dsEKF implementation
+                    % % measurement partials matrix
+                    % [Hk,Hj] = obj.meas.measpartials(tk,x_,tprev,xprev);
+                    % Hk = Hk(mask,:);                  % mask out invalid meas
+                    % Hj = Hj(mask,:);
+                    % 
+                    % tic
+                    % Pinv = inv(Phi);
+                    % J = Hj*Pinv;
+                    % N = Hj*Pinv*S;
+                    % H = Hj*Pinv + Hk;
+                    % R = J*S*J' + Rk;
+                    % G = H*P_*H' - N*H' - H*N' + R;
+                    % K = (P_*H' - N')/G;
+                    % obj.x(:,k) = x_ + K*Y;
+                    % obj.P(:,:,k) = (eye(obj.n) - K*H)*P_*(eye(obj.n) - K*H)' + ...
+                    %     (eye(obj.n) - K*H)*N'*K' + K*N*(eye(obj.n) - K*H)' + K*R*K';
+                    % toc
+                    % 
+                    % x2 = obj.x(:,k);
+                    % P2 = obj.P(:,:,k);
 
                     % store states for next time
                     tprev = tk;

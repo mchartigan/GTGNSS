@@ -445,7 +445,7 @@ classdef OrbitPropagator < Propagator
         end
 
         function Q = noise(obj,dt,x)
-            %PNC Returns the discrete-time process noise covariance over
+            %NOISE Returns the discrete-time process noise covariance over
             %the time interval dt.
             %   Input:
             %    - dt; time interval, in s
@@ -587,7 +587,7 @@ classdef OrbitPropagator < Propagator
             rate = 1/(1 - obj.L_B) * (1 - 1/obj.c^2*relrate(t));
         end
 
-        function x_rel = propertimestep(obj,ts,xs)
+        function [x_rel,d_rel] = propertimestep(obj,ts,xs)
             %PROPERTIMESTEP Determine the change in proper time rate and
             %proper time from TDB over the interval (from start).
             %   Input:
@@ -615,7 +615,7 @@ classdef OrbitPropagator < Propagator
                         - r).^2, 1));
                 end
 
-                d_rel(i) = -1 / (1-obj.L_B) / obj.c^2 * U * 1e6;
+                d_rel(i) = 1 / (1-obj.L_B) * (1 - 1/obj.c^2 * U * 1e6);
 
                 if i ~= 1
                     dt = ts(i) - ts(i-1);
