@@ -43,16 +43,18 @@ classdef Receiver < handle
         F           (1,1)   {mustBePositive,mustBeInteger,mustBeLessThan(F,3)} = 1
         % Hz, carrier loop noise bandwidth (default moderate)
         % Bn_PLL <= 1/2/T_PLL for Nyquist stability
-        Bn_PLL        (1,1)   double {mustBePositive} = 2
-        Bn_FLL        (1,1)   double {mustBePositive} = 2
+        Bn_PLL      (1,1)   double {mustBePositive} = 2
+        Bn_FLL      (1,1)   double {mustBePositive} = 2
         % s, carrier predetection integration time; must be half of data
         % bit transition time so it can bet two samples to form the
         % discriminator; doesn't matter if data = 0 (default AFS-complaint)
-        T_PLL         (1,1)   double {mustBePositive} = 0.002
-        T_FLL         (1,1)   double {mustBePositive} = 0.002
+        T_PLL       (1,1)   double {mustBePositive} = 0.002
+        T_FLL       (1,1)   double {mustBePositive} = 0.002
 
         % dB-Hz, optional acquisition and tracking thresholds
-        threshold     (1,:)   double = []
+        threshold   (1,:)   double = []
+        % noise multiplier for custom implementations
+        mult        (1,1)   double = 1
     end
 
     properties (Constant)
@@ -270,6 +272,14 @@ classdef Receiver < handle
                 var.clk(3,:) = var.clk(3,:) * scale;
                 var.dyn(3,:) = var.dyn(3,:) * scale;
                 var.total(3,:) = var.total(3,:) * scale;
+            end
+
+            % scale noise by mult
+            if obj.mult ~= 1
+                var.thermal = var.thermal * obj.mult;
+                var.clk = var.clk * obj.mult;
+                var.dyn = var.dyn * obj.mult;
+                var.total = var.total * obj.mult;
             end
 
             % generate noise based on var

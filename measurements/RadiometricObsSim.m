@@ -22,6 +22,8 @@ classdef RadiometricObsSim < Measurement
         % is bias estimation implemented? (changes # of states)
         bias    (1,:)   Propagator = RandomRun.empty
         nbias   (1,1)   {mustBeInteger,mustBeNonnegative}
+        % hidden measurement scaling property
+        scale   (1,1)   double {mustBePositive} = 1
     end
 
     properties (Constant)
@@ -72,7 +74,7 @@ classdef RadiometricObsSim < Measurement
             obj.msgs = [];
             var = cell(obj.nsats,1);
             err = cell(obj.nsats,1);
-            R = zeros(obj.dim,obj.dim,n);
+            R = zeros(obj.dim,n);
             CN0 = zeros(obj.nsats,n);
 
             for i=1:obj.nsats
@@ -114,7 +116,7 @@ classdef RadiometricObsSim < Measurement
                 % All the while adding the user clock bias and drift
                 % m, pseudorange
                 y(i,:) = y_raw(1,:) + x_user(7,:);
-                R(i,i,:) = var1.total(1,:);
+                R(i,:) = var1.total(1,:);
 
                 % m, delta-pseudorange
                 if obj.user.rx.PLL
@@ -122,22 +124,21 @@ classdef RadiometricObsSim < Measurement
                     % change measurements to delta-pseudorange
                     y(i+obj.nsats,:) = [nan ...
                         y(i+obj.nsats,2:end) - y(i+obj.nsats,1:end-1)];
-                    R(i+obj.nsats,i+obj.nsats,:) = var1.total(2,:);
+                    R(i+obj.nsats,:) = var1.total(2,:);
                 end
                 % m/s, Doppler
                 if obj.user.rx.FLL
                     y(i+2*obj.nsats,:) = y_raw(3,:) + x_user(8,:);
-                    R(i+2*obj.nsats,i+2*obj.nsats,:) = var1.total(3,:);
+                    R(i+2*obj.nsats,:) = var1.total(3,:);
                 end
 
                 % if estimating bias, remove from meas. noise
                 if obj.nbias && obj.bias(i).dim ~= 0
-                    R(i,i,:) = R(i,i,:) - reshape(var1.eph_prop(1,:) + ...
+                    R(i,:) = R(i,:) - reshape(var1.eph_prop(1,:) + ...
                         var1.clk_prop(1,:), 1, 1, []);
 
                     if obj.user.rx.FLL && obj.bias(i).dim > 1
-                        R(i+2*obj.nsats,i+2*obj.nsats,:) = ...
-                            R(i+2*obj.nsats,i+2*obj.nsats,:) - ...
+                        R(i+2*obj.nsats,:) = R(i+2*obj.nsats,:) - ...
                             reshape(var1.eph_prop(3,:) + ...
                             var1.clk_prop(3,:), 1, 1, []);
                     end
@@ -448,7 +449,7 @@ classdef RadiometricObsSim < Measurement
                 t       (1,:)   double
                 yobs    (:,:)   double
                 ycomp   (:,:)   double
-                R       (:,:,:) double
+                R       (:,:)   double
             end
 
             % get plotting timescale and units
@@ -465,12 +466,6 @@ classdef RadiometricObsSim < Measurement
                 units = "(days)";
             end
 
-            % reformat covariance
-            Rdiag = zeros(size(R,1),size(R,3));
-            for i=1:length(t)
-                Rdiag(:,i) = diag(R(:,:,i));
-            end
-
             figure();
             plotformat("APA", 0.25*obj.m + 0.25, color="greyscale");
             colors = colororder;
@@ -481,7 +476,7 @@ classdef RadiometricObsSim < Measurement
             mask = ~isnan(yobs(1,:));
             dt = t(mask);
             p_err = yobs(1,mask) - ycomp(1,mask);
-            p_std = 3 * sqrt(Rdiag(1,mask));
+            p_std = 3 * sqrt(R(1,mask));
             plot(dt, p_err);
             hold on;
             patch([dt flip(dt)], [-p_std flip(p_std)], colors(2,:), ...
@@ -497,7 +492,7 @@ classdef RadiometricObsSim < Measurement
                 mask = ~isnan(yobs(2,:));
                 dt = t(mask);
                 dp_err = yobs(2,mask) - ycomp(2,mask);
-                dp_std = 3 * sqrt(Rdiag(2,mask));
+                dp_std = 3 * sqrt(R(2,mask));
                 msgbound = abs(dp_err) > 0.1;
                 dp_err(msgbound) = [];
                 dp_std(msgbound) = [];
@@ -518,7 +513,7 @@ classdef RadiometricObsSim < Measurement
                 mask = ~isnan(yobs(3,:));
                 dt = t(mask);
                 f_err = yobs(3,mask) - ycomp(3,mask);
-                f_std = 3 * sqrt(Rdiag(3,mask));
+                f_std = 3 * sqrt(R(3,mask));
                 plot(dt, f_err);
                 hold on;
                 patch([dt flip(dt)], [-f_std flip(f_std)], colors(2,:), ...
