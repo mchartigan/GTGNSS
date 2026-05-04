@@ -346,7 +346,7 @@ classdef NavSatellite < handle
             end
 
             n = length(ts);     % no. of measurements
-            frame = 'J2000';
+            frame = 'J2000'; inertial = 1;
             % get reference trajectory of satellite and clock
             xref = zeros(9,n);
             xref(1:6,:) = obj.traj(1).get(tt, frame);
@@ -408,11 +408,9 @@ classdef NavSatellite < handle
     
                     % compute model states and all errors/variances
                     for k=find(jj)
-                        [xmdl(:,k),T] = RadiometricObsSim.geteph(tt(k), ...
-                            obj.ID, msg(i,:), obj.prop.orbit.pri.GM);
+                        xmdl(:,k) = RadiometricObsSim.geteph(tt(k), ...
+                            obj.ID, msg(i,:), inertial, obj.prop.orbit.pri.GM);
     
-                        % rotate to inertial since that's where we're handling
-                        xmdl(1:6,k) = T \ xmdl(1:6,k);
                         % compute time step errors
                         err_prop = xprop(:,k) - xref(:,k);
                         err_mdl = xmdl(:,k) - xprop(:,k);

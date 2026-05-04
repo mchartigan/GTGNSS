@@ -200,11 +200,10 @@ classdef LunarPropagator < OrbitPropagator
     
                 xbase = zeros(6,n);
                 for k=1:n
-                    [temp,T_J2ME] = RadiometricObsSim.geteph(teval(k), 0, kepmsg);
-                    T_ME2J = [T_J2ME(1:3,1:3)' zeros(3)
-                              T_J2ME(4:6,1:3)' T_J2ME(4:6,4:6)'];
-                    % geteph() returns MOON_ME, so rotate back
-                    xbase(:,k) = T_ME2J * temp(1:6);
+                    temp = RadiometricObsSim.geteph(teval(k), 0, kepmsg, 1);
+                    xbase(:,k) = temp(1:6);
+                    % T_ME2J = [T_J2ME(1:3,1:3)' zeros(3)
+                    %           T_J2ME(4:6,1:3)' T_J2ME(4:6,4:6)'];
                 end
                 % state error
                 dx = xeval - xbase;

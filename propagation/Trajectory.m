@@ -38,7 +38,7 @@ classdef Trajectory < handle
             end
         end
 
-        function x = get(obj,t,outframe)
+        function x = get(obj,t,opts)
             %GET Returns the state at t. To get interpolated values,
             %obj.interp() must be called first.
             %   Input:
@@ -46,9 +46,10 @@ classdef Trajectory < handle
             %    - outframe; optional, frame to provide data in (if prev.
             %       specified)
             arguments
-                obj         (1,1) Trajectory
-                t           (1,:) double
-                outframe    (1,:) char = ''
+                obj             (1,1) Trajectory
+                t               (1,:) double
+                opts.outframe   (1,:) char = ''
+                opts.range      (1,:) double = []
             end
 
             % check if values are explicitly defined
@@ -66,7 +67,7 @@ classdef Trajectory < handle
             end
 
             % check if frame transformations requested and necessary
-            if ~isempty(outframe) && ~strcmpi(outframe, obj.frame)
+            if ~isempty(opts.outframe) && ~strcmpi(opts.outframe, obj.frame)
                 if isempty(obj.frame)   % error if obj.frame not defined
                     error("Trajectory:invalidFrame", ...
                         "Output frame specified but not set in the object.");
@@ -76,20 +77,25 @@ classdef Trajectory < handle
                 n = size(obj.xs, 1);
                 if n == 6       % do pos,vel transformation
                     for i=1:length(t)
-                        x(:,i) = cspice_sxform(obj.frame, outframe, t(i)) * x(:,i);
+                        x(:,i) = cspice_sxform(obj.frame, opts.outframe, t(i)) * x(:,i);
                     end
                 elseif n == 3   % do pos transformation
                     for i=1:length(t)
-                        x(:,i) = cspice_pxform(obj.frame, outframe, t(i)) * x(:,i);
+                        x(:,i) = cspice_pxform(obj.frame, opts.outframe, t(i)) * x(:,i);
                     end
                 else            % can't transform data (wrong size)
                     error("Trajectory:invalidSize", ...
                         "State must be 3D or 6D, rather than %dD.", n);
                 end
             end
+
+            % only return part of data if requested
+            if ~isempty(opts.range)
+                x = x(opts.range,:);
+            end
         end
 
-        function r = getpos(obj,t,outframe)
+        function r = getpos(obj,t,frame)
             %GETPOS Wrapper for Trajectory.get() that returns first 3
             %elements of state vector only. Typically used to extract only
             %the position from a position & velocity vector.
@@ -97,12 +103,17 @@ classdef Trajectory < handle
             %    - t; time(s) to access
             %    - outframe; optional, frame to provide data in (if prev.
             %       specified)
+            arguments
+                obj     (1,1)   Trajectory
+                t       (1,:)   double
+                frame   (1,:)   char = 'J2000'
+            end
 
-            x = obj.get(t,outframe);
+            x = obj.get(t,outframe=frame);
             r = x(1:3,:);
         end
 
-        function r = getvel(obj,t,outframe)
+        function r = getvel(obj,t,frame)
             %GETVEL Wrapper for Trajectory.get() that returns elements 4-6 of
             %the state vector only. Typically used to extract only the velocity
             %from a position & velocity vector.
@@ -110,8 +121,13 @@ classdef Trajectory < handle
             %    - t; time(s) to access
             %    - outframe; optional, frame to provide data in (if prev.
             %       specified)
+            arguments
+                obj     (1,1)   Trajectory
+                t       (1,:)   double
+                frame   (1,:)   char = 'J2000'
+            end
 
-            x = obj.get(t,outframe);
+            x = obj.get(t,outframe=frame);
             r = x(4:6,:);
         end
 

@@ -19,6 +19,7 @@ classdef RadiometricObsSim < Measurement
         msgs    (:,:)   double
         % reference frame of measurements (for geteph())
         frame   (1,:)   {mustBeText} = 'MOON_ME'
+        inertial    (1,1) = 0
         % is bias estimation implemented? (changes # of states)
         bias    (1,:)   Propagator = RandomRun.empty
         nbias   (1,1)   {mustBeInteger,mustBeNonnegative}
@@ -90,7 +91,7 @@ classdef RadiometricObsSim < Measurement
 
                 % update total based on new measurement model
                 % delta-pseudorange measurements
-                var2.total(2,:) = [nan var1.total(2,2:end).*(ts(2:end) - ts(1:end-1)).^2 + ...
+                var2.total(2,:) = [nan var1.total(2,2:end).*(ts(2:end)-ts(1:end-1)).^2 + ...
                     var2.total(2,1:end-1) + var2.total(2,2:end)];
                 % pseudorange measurements
                 var2.total(1,:) = var2.total(1,:) + var1.total(1,:);
@@ -124,6 +125,13 @@ classdef RadiometricObsSim < Measurement
                     % change measurements to delta-pseudorange
                     y(i+obj.nsats,:) = [nan ...
                         y(i+obj.nsats,2:end) - y(i+obj.nsats,1:end-1)];
+                    % eliminate every other measurement to remove correlation
+                    for j=2:n-1
+                        if ~isnan(y(i+obj.nsats,j))
+                            y(i+obj.nsats,j+1) = nan;
+                        end
+                    end
+
                     R(i+obj.nsats,:) = var1.total(2,:);
                 end
                 % m/s, Doppler
@@ -131,6 +139,8 @@ classdef RadiometricObsSim < Measurement
                     y(i+2*obj.nsats,:) = y_raw(3,:) + x_user(8,:);
                     R(i+2*obj.nsats,:) = var1.total(3,:);
                 end
+
+
 
                 % if estimating bias, remove from meas. noise
                 if obj.nbias && obj.bias(i).dim ~= 0
@@ -211,15 +221,9 @@ classdef RadiometricObsSim < Measurement
                 % find transmission time w.r.t meas, based on nav msg knowledge
                 % of satellite states
                 tt = obj.timeofflight(tr,x(1:9),obj.sats(i).ID,obj.msgs);
-                [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
-                    obj.sats(1).prop.orbit.pri.GM);
-                % rotate to inertial if that's how we're managing things
-                if strcmp(obj.frame, 'J2000')
-                    x_s(1:6) = cspice_invstm(T) * x_s(1:6);
-                elseif ~strcmp(obj.frame, 'MOON_ME')
-                    error("computemeas:invalidFrame", ...
-                        "Cannot recognize frame %s. Supported frames are 'J2000', 'MOON_ME'.", obj.frame);
-                end
+                x_s = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                    obj.inertial, obj.sats(1).prop.orbit.pri.GM);
+
                 xs(:,i) = x_s;
                 r_s = x_s(1:3); 
                 v_s = x_s(4:6);
@@ -245,15 +249,9 @@ classdef RadiometricObsSim < Measurement
                     % find transmission time w.r.t meas, based on nav msg knowledge
                     % of satellite states
                     tt = obj.timeofflight(tprev,xprev(1:9),obj.sats(i).ID,obj.msgs);
-                    [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
-                        obj.sats(1).prop.orbit.pri.GM);
-                    % rotate to inertial if that's how we're managing things
-                    if strcmp(obj.frame, 'J2000')
-                        x_s(1:6) = cspice_invstm(T) * x_s(1:6);
-                    elseif ~strcmp(obj.frame, 'MOON_ME')
-                        error("computemeas:invalidFrame", ...
-                            "Cannot recognize frame %s. Supported frames are 'J2000', 'MOON_ME'.", obj.frame);
-                    end
+                    x_s = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                        obj.inertial, obj.sats(1).prop.orbit.pri.GM);
+
                     dr = x_s(1:3) - xprev(1:3);     % relative user->sat position (m)
                     rho = norm(dr);                 % scalar range
                     % change it to delta-pseudorange
@@ -316,15 +314,9 @@ classdef RadiometricObsSim < Measurement
                 % find transmission time w.r.t meas, based on nav msg knowledge
                 % of satellite states
                 tt = obj.timeofflight(tr,x(1:9),obj.sats(i).ID,obj.msgs);
-                [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
-                    obj.sats(1).prop.orbit.pri.GM);
-                % rotate to inertial if that's how we're managing things
-                if strcmp(obj.frame, 'J2000')
-                    x_s(1:6) = cspice_invstm(T) * x_s(1:6);
-                elseif ~strcmp(obj.frame, 'MOON_ME')
-                    error("measpartials:invalidFrame", ...
-                        "Cannot recognize frame %s. Supported frames are 'J2000', 'MOON_ME'.", obj.frame);
-                end
+                x_s = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                    obj.inertial, obj.sats(1).prop.orbit.pri.GM);
+
                 r_s = x_s(1:3); 
                 v_s = x_s(4:6);
     
@@ -348,15 +340,9 @@ classdef RadiometricObsSim < Measurement
                     % find transmission time w.r.t meas, based on nav msg knowledge
                     % of satellite states
                     tt = obj.timeofflight(tprev,xprev(1:9),obj.sats(i).ID,obj.msgs);
-                    [x_s,T] = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
-                        obj.sats(1).prop.orbit.pri.GM);
-                    % rotate to inertial if that's how we're managing things
-                    if strcmp(obj.frame, 'J2000')
-                        x_s(1:6) = cspice_invstm(T) * x_s(1:6);
-                    elseif ~strcmp(obj.frame, 'MOON_ME')
-                        error("computemeas:invalidFrame", ...
-                            "Cannot recognize frame %s. Supported frames are 'J2000', 'MOON_ME'.", obj.frame);
-                    end
+                    x_s = obj.geteph(tt,obj.sats(i).ID,obj.msgs, ...
+                        obj.inertial, obj.sats(1).prop.orbit.pri.GM);
+
                     dr = x_s(1:3) - xprev(1:3);     % relative user->sat position (m)
                     rho = norm(dr);                 % scalar range
 
@@ -402,22 +388,15 @@ classdef RadiometricObsSim < Measurement
             if nargin < 6, tol = 1e-10; end
 
             % initial guess at signal time-of-flight
-            [xSV,T] = obj.geteph(tr, ID, msg, obj.sats(1).prop.orbit.pri.GM);
-            % rotate to inertial if that's how we're managing things
-            if strcmp(obj.frame, 'J2000')
-                xSV(1:6) = cspice_invstm(T) * xSV(1:6);
-            end
+            xSV = obj.geteph(tr, ID, msg, obj.sats(1).prop.orbit.pri.GM);
+
             tt = tr;
             dt_old = norm(xSV(1:3) - user(1:3)) / obj.c;
 
             for i=1:10
                 tt = tr - dt_old;           % time offset guess
                 % updated time-of-flight guess
-                [xSV,T] = obj.geteph(tt, ID, msg, obj.sats(1).prop.orbit.pri.GM);
-                % rotate to inertial if that's how we're managing things
-                if strcmp(obj.frame, 'J2000')
-                    xSV(1:6) = cspice_invstm(T) * xSV(1:6);
-                end
+                xSV = obj.geteph(tt, ID, msg, obj.inertial, obj.sats(1).prop.orbit.pri.GM);
                 dt = norm(xSV(1:3) - user(1:3)) / obj.c;
 
                 % if iteration is converging
@@ -473,10 +452,12 @@ classdef RadiometricObsSim < Measurement
 
             % plot pseudorange error
             nexttile();
-            mask = ~isnan(yobs(1,:));
-            dt = t(mask);
-            p_err = yobs(1,mask) - ycomp(1,mask);
-            p_std = 3 * sqrt(R(1,mask));
+            maskDLL = ~isnan(yobs(1,:));
+            maskPLL = ~isnan(yobs(2,:));
+            maskFLL = ~isnan(yobs(3,:));
+            dt = t(maskDLL);
+            p_err = yobs(1,maskDLL) - ycomp(1,maskDLL);
+            p_std = 3 * sqrt(R(1,maskDLL));
             plot(dt, p_err);
             hold on;
             patch([dt flip(dt)], [-p_std flip(p_std)], colors(2,:), ...
@@ -489,10 +470,9 @@ classdef RadiometricObsSim < Measurement
             % compute delta-pseudorange at measurement spacing and plot
             if obj.user.rx.PLL
                 nexttile();
-                mask = ~isnan(yobs(2,:));
-                dt = t(mask);
-                dp_err = yobs(2,mask) - ycomp(2,mask);
-                dp_std = 3 * sqrt(R(2,mask));
+                dt = t(maskPLL);
+                dp_err = yobs(2,maskPLL) - ycomp(2,maskPLL);
+                dp_std = 3 * sqrt(R(2,maskPLL));
                 msgbound = abs(dp_err) > 0.1;
                 dp_err(msgbound) = [];
                 dp_std(msgbound) = [];
@@ -510,10 +490,9 @@ classdef RadiometricObsSim < Measurement
             % plot Doppler error
             if obj.user.rx.FLL
                 nexttile();
-                mask = ~isnan(yobs(3,:));
-                dt = t(mask);
-                f_err = yobs(3,mask) - ycomp(3,mask);
-                f_std = 3 * sqrt(R(3,mask));
+                dt = t(maskFLL);
+                f_err = yobs(3,maskFLL) - ycomp(3,maskFLL);
+                f_std = 3 * sqrt(R(3,maskFLL));
                 plot(dt, f_err);
                 hold on;
                 patch([dt flip(dt)], [-f_std flip(f_std)], colors(2,:), ...
@@ -586,10 +565,22 @@ classdef RadiometricObsSim < Measurement
             xlabel("Time (min)");
             ylabel("FLL \sigma^2 (m^2)");
         end
+
+        function setframe(obj,frame)
+            %SETFRAME Set frame property of class, and parse inertial vs
+            %noninertial
+
+            obj.frame = frame;
+            if strcmpi(frame, 'J2000')
+                obj.inertial = 1;
+            else
+                obj.inertial = 0;
+            end
+        end
     end
 
     methods (Static)
-        function [x,T] = geteph(t,ID,msg,GM)
+        function [x,T] = geteph(t,ID,msg,inertial,GM)
             %GETEPH Read the navigation message and return the satellite
             %ephemeris at time t.
             %   Input:
@@ -597,11 +588,16 @@ classdef RadiometricObsSim < Measurement
             %    - ID  (1,1) double; satellite ID
             %    - msg (:,:) double; navigation message data, in array. See
             %       NavSatellite.generatenavmsg() for format.
+            %    - inertial (1,1) boolean; return in inertial frame?
+            %       default false
+            %    - GM  (1,1) double; central body gravitational parameter,
+            %       default Moon's
             %   Output:
             %    - x; satellite state at time t
             %       [pos (km); vel (km/s); t bias (s); drift (s/s); rate (s/s^2)]
 
-            if nargin < 4, GM = RadiometricObsSim.GM; end
+            if nargin < 4, inertial = false; end
+            if nargin < 5, GM = RadiometricObsSim.GM; end
 
             % find line
             for line=size(msg,1):-1:1
@@ -660,7 +656,7 @@ classdef RadiometricObsSim < Measurement
             end
 
             % apply transformation
-            x(1:6) = T * x(1:6);
+            if ~inertial, x(1:6) = T * x(1:6); end
         end
     end
 end

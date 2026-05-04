@@ -52,6 +52,8 @@ classdef OrbitPropagator < Propagator
         unit = 1
         % m/s, speed of light
         c    = 299792458
+        % km/s, speed of light
+        c_km = 299792.458
         % relativity constants %
         % consider all major planets for gravitational potential
         % MERCURY BARYCENTER (1)  SATURN BARYCENTER (6)   MERCURY (199)
@@ -59,7 +61,8 @@ classdef OrbitPropagator < Propagator
         % EARTH BARYCENTER (3)    NEPTUNE BARYCENTER (8)  MOON (301)
         % MARS BARYCENTER (4)     PLUTO BARYCENTER (9)    EARTH (399)
         % JUPITER BARYCENTER (5)  SUN (10)
-        np   = [10 399 301 299 5 6 4 199 7 8]
+        % np   = [10 399 301 299 5 6 4 199 7 8]
+        np   = [10 399 301]
         GMs  (1,:) double = []
         % TDB-TCB rate coefficient
         L_B  = 1.550519768e-8
@@ -461,6 +464,7 @@ classdef OrbitPropagator < Propagator
             M = [R T N];
             Qbar = M*obj.Qrtn*M';
             Q = [Qbar*dt^3/3 Qbar*dt^2/2; Qbar*dt^2/2 Qbar*dt];
+            % Q = [Qbar*dt^5/20 Qbar*dt^4/8; Qbar*dt^4/8 Qbar*dt^3/3];
         end
 
         function [fx,C] = modelfit(obj,traj,t0,type,N)
@@ -504,7 +508,7 @@ classdef OrbitPropagator < Propagator
 
             if N ~= 0
                 % get state at interpolation points
-                x = traj.get(t_interp + t0, 'J2000');
+                x = traj.get(t_interp + t0, outframe='J2000');
                 dx = x - x_base;
     
                 % compute coefficients for basis and generate model function
@@ -572,19 +576,19 @@ classdef OrbitPropagator < Propagator
 
             % compute states relative to SSB
             x_SSB = cspice_spkezr(obj.pri.name, t, 'J2000', 'NONE', 'SSB');
-            x_sc = traj.get(t, 'J2000');
+            x_sc = traj.get(t, outframe='J2000');
             traj = Trajectory(t, x_sc + x_SSB, 'J2000');
 
             % compute integral
-            relrate = @(p) obj.integrand(p, @(q) traj.getpos(q,'J2000'), ...
-                @(q) traj.getvel(q,'J2000'), obj.np, obj.GMs);
+            relrate = @(p) obj.integrand(p, @(q) traj.getpos(q), ...
+                @(q) traj.getvel(q), obj.np, obj.GMs);
             relint = zeros(size(t));
             for i=2:n
-                relint(i) = relint(i-1) + integral(relrate, t(i-1), t(i), RelTol=1e-11);
+                relint(i) = relint(i-1) + integral(relrate, t(i-1), t(i), RelTol=1e-12, AbsTol=1e-12);
             end
 
-            tau = obj.L_B/(1 - obj.L_B)*(t - t0) - 1/(1 - obj.L_B)/obj.c^2 * relint;
-            rate = 1/(1 - obj.L_B) * (1 - 1/obj.c^2*relrate(t));
+            tau = obj.L_B/(1 - obj.L_B)*(t - t0) - 1/(1 - obj.L_B)/obj.c_km^2 * relint;
+            rate = 1/(1 - obj.L_B) * (obj.L_B - 1/obj.c_km^2*relrate(t));
         end
 
         function [x_rel,d_rel] = propertimestep(obj,ts,xs)
@@ -615,7 +619,7 @@ classdef OrbitPropagator < Propagator
                         - r).^2, 1));
                 end
 
-                d_rel(i) = 1 / (1-obj.L_B) * (1 - 1/obj.c^2 * U * 1e6);
+                d_rel(i) = 1 / (1-obj.L_B) * (1 - 1/obj.c_km^2 * U);
 
                 if i ~= 1
                     dt = ts(i) - ts(i-1);
@@ -638,7 +642,7 @@ classdef OrbitPropagator < Propagator
 
             for i=1:n
                 [as(i),es(i),is(i),RAANs(i),ws(i),fs(i)] = ...
-                    rv2oe(traj.get(traj.ts(i), frame), obj.pri.GM);
+                    rv2oe(traj.get(traj.ts(i), outframe=frame), obj.pri.GM);
             end
 
             is = is * 180/pi;
@@ -798,9 +802,6 @@ classdef OrbitPropagator < Propagator
                     num2str(planets(i)), t, 'J2000', 'NONE', 'SSB') ...
                     - r(t)).^2, 1));
             end
-        
-            % convert to m^2
-            f = f * 1e6;
         end
     end
 end

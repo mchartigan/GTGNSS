@@ -9,8 +9,6 @@ classdef dsEKF < handle
         y      (:,:)   double               % measurements
         R      (:,:,:) double               % measurement noise
         P      (:,:,:) double               % state covariance history
-        U      (:,:)   double               % measurement underweighting
-        opts   (1,1)   struct               % ODE45 propagation options
         n      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of states
         m      (1,1)   {mustBeNonnegative, mustBeInteger} = 1   % # of steps in t_meas
         s      (1,1)   {mustBePositive, mustBeInteger} = 1      % # of steps in t
@@ -33,7 +31,6 @@ classdef dsEKF < handle
             %    - t_meas; time stamps where measurements are taken
             %    - t_sim; optional (if different from t_meas) name-value
             %             pair, time stamps to get state between measurements
-            %    - opts; optional name-value pair, ODE45 propagation options
             arguments
                 prop    (1,1)   Propagator
                 meas    (1,1)   Measurement
@@ -41,7 +38,6 @@ classdef dsEKF < handle
                 R       (:,:,:) double
                 t_meas  (1,:)   double
                 options.t_sim   (1,:)   double = []
-                options.opts    (1,1)   struct = odeset()
             end
 
             % check number of supplied measurements is correct
@@ -142,16 +138,15 @@ classdef dsEKF < handle
                     Hk = Hk(mask,:);                  % mask out invalid meas
                     Hj = Hj(mask,:);
 
-                    Pinv = inv(Phi);
-                    J = Hj*Pinv;
-                    N = Hj*Pinv*S;
-                    H = Hj*Pinv + Hk;
+                    J = Hj/Phi;
+                    N = J*S;
+                    H = J + Hk;
                     R = J*S*J' + Rk;
                     G = H*P_*H' - N*H' - H*N' + R;
                     K = (P_*H' - N')/G;
                     obj.x(:,k) = x_ + K*Y;
-                    obj.P(:,:,k) = (eye(obj.n) - K*H)*P_*(eye(obj.n) - K*H)' + ...
-                        (eye(obj.n) - K*H)*N'*K' + K*N*(eye(obj.n) - K*H)' + K*R*K';
+                    obj.P(:,:,k) = (eye(obj.n) - K*H)*P_*(eye(obj.n) - K*H)' - ...
+                        (eye(obj.n) - K*H)*N'*K' - K*N*(eye(obj.n) - K*H)' + K*R*K';
 
 
                     % store states for next time

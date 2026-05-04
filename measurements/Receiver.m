@@ -288,6 +288,8 @@ classdef Receiver < handle
                 err(ind,i) = mvnrnd(zeros(1,sum(ind)), diag(var.total(ind,i)))';
             end
             % apply noise to measurements
+            % DEBUG - DON'T
+            % err(~isnan(err)) = 0;
             y = y + err;
 
             % create tracking masks
