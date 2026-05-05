@@ -43,7 +43,7 @@ classdef User < handle & matlab.mixin.Copyable
             
             x = zeros(obj.motion.dim + obj.clock.dim, length(ts));
             % Populate state data based on motion and clock trajectories
-            x(1:obj.motion.dim,:) = obj.motion.get(ts, frame);
+            x(1:obj.motion.dim,:) = obj.motion.get(ts, outframe=frame);
             x(obj.motion.dim+1:obj.motion.dim+obj.clock.dim,:) = obj.clock.get(ts);
 
             for i=1:length(obj.extra)

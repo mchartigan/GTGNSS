@@ -144,33 +144,31 @@ classdef RadiometricObsSim < Measurement
 
                 % if estimating bias, remove from meas. noise
                 if obj.nbias && obj.bias(i).dim ~= 0
-                    R(i,:) = R(i,:) - reshape(var1.eph_prop(1,:) + ...
-                        var1.clk_prop(1,:), 1, 1, []);
+                    R(i,:) = R(i,:) - var1.eph_prop(1,:) - var1.clk_prop(1,:);
 
                     if obj.user.rx.FLL && obj.bias(i).dim > 1
                         R(i+2*obj.nsats,:) = R(i+2*obj.nsats,:) - ...
-                            reshape(var1.eph_prop(3,:) + ...
-                            var1.clk_prop(3,:), 1, 1, []);
+                            var1.eph_prop(3,:) - var1.clk_prop(3,:);
                     end
                 end
             end
 
-            % % plot CN0
-            % tplot = (ts - ts(1)) / 60;
-            % figure();
-            % plotformat("APA", 0.5);
-            % % styles = {'-', '--', '-.', ':'};
-            % plot(0, 0, color='none');
-            % hold on;
-            % for i=1:obj.nsats
-            %     valid = CN0(i,:) > 0;
-            %     plot(tplot(valid), CN0(i,valid), LineWidth=2);
-            % end
-            % hold off; grid on;
-            % axis([tplot(1) tplot(end) 0 50]);
-            % xlabel("Time (mins)");
-            % ylabel("C/N0 (dB-Hz)");
-            % title("Receiver CN0 for each LDN link");
+            % plot CN0
+            tplot = (ts - ts(1)) / 60;
+            figure();
+            plotformat("APA", 0.5);
+            styles = {'-', '--', '-.', ':'};
+            plot(0, 0, color='none');
+            hold on;
+            for i=1:obj.nsats
+                valid = ~isnan(R(i,:));
+                plot(tplot(valid), CN0(i,valid), LineWidth=2, LineStyle=styles{mod(i-1,4)+1});
+            end
+            hold off; grid on;
+            axis([tplot(1) tplot(end) 0 50]);
+            xlabel("Time (mins)");
+            ylabel("C/N0 (dB-Hz)");
+            title("Receiver CN0 for each LDN link");
             % 
             % % plot # links?
             % figure();
@@ -265,7 +263,7 @@ classdef RadiometricObsSim < Measurement
                     if obj.user.rx.FLL && obj.bias(i).dim > 1
                         y(i+2*obj.nsats) = y(i+2*obj.nsats) + x(k+2);
                     end
-                    if obj.user.rx.PLL && ~isnan(tprev)
+                    if obj.user.rx.PLL && nargin > 3
                         y(i+obj.nsats) = y(i+obj.nsats) + x(k+1) - xprev(k+1);
                     end
 
