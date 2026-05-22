@@ -167,7 +167,7 @@ classdef NavSatellite < handle
             % state of user w.r.t. obj.prop.body
             xuser = user.motion.getpos(ts, 'J2000');
             % state of sat w.r.t. obj.prop.body
-            xsat  = obj.traj(1).get(tt, 'J2000');
+            xsat  = obj.traj(1).get(tt, outframe='J2000');
             % get User->obj.prop.body direction at each time step
             u_u1 = -xuser ./ sqrt(sum(xuser.^2, 1));
             % get nadir direction at sat at each time step
@@ -345,11 +345,11 @@ classdef NavSatellite < handle
                 user    (1,1)   User
             end
 
-            n = length(ts);     % no. of measurements
+            n = length(tt);     % no. of measurements
             frame = 'J2000'; inertial = 1;
             % get reference trajectory of satellite and clock
             xref = zeros(9,n);
-            xref(1:6,:) = obj.traj(1).get(tt, frame);
+            xref(1:6,:) = obj.traj(1).get(tt, outframe=frame);
             xref(7:9,:) = obj.traj(2).get(tt);
             % get reference trajectory of user
             xuser = user.getstates(ts, frame);
@@ -393,17 +393,27 @@ classdef NavSatellite < handle
                 % propagate states over given times. tmsg(i) provided so
                 % trajectory starts at appropriate time
                 tsub = [tmsg(i) tmsg(i+1)];
-                [ts,xsub] = obj.prop.run(tsub, xmsg(:,i), 1000, frame, false);
+                [tsub,xsub] = obj.prop.run(tsub, xmsg(:,i), 1000, frame, false);
                 % provide these propagated states (plus initial one) as a
                 % Trajectory and create a navigation message about it.
-                subeph = Trajectory(ts, xsub(1:6,:), frame);
-                subclk = Trajectory(ts, xsub(7:9,:));
+                subeph = Trajectory(tsub, xsub(1:6,:), frame);
+                subclk = Trajectory(tsub, xsub(7:9,:));
                 msg(i,:) = obj.generatenavmsg([subeph; subclk]);
+
+                xeval = zeros(6,1000);
+                for j=1:1000
+                    temp = RadiometricObsSim.geteph(tsub(j), obj.ID, msg(i,:), ...
+                        inertial, obj.prop.orbit.pri.GM);
+                    xeval(:,j) = temp(1:6);
+                end
+
+                % twah = Trajectory(tsub, xeval, frame);
+                % obj.prop.orbit.plot([subeph twah], 'J2000');
 
                 if sum(jj)
                     % cut out xmsg(:,i) since it may not align with tt
-                    xprop(:,jj) = [subeph.get(tt(jj), frame); subclk.get(tt(jj))];
-                    Ptemp = obj.prop.proplyapunov([ts(1) tt(jj)], xsub(:,1), Pmsg(:,:,i));
+                    xprop(:,jj) = [subeph.get(tt(jj), outframe=frame); subclk.get(tt(jj))];
+                    Ptemp = obj.prop.proplyapunov([tsub(1) tt(jj)], xsub(:,1), Pmsg(:,:,i));
                     Pprop(:,:,jj) = Ptemp(:,:,2:end);
     
                     % compute model states and all errors/variances
@@ -439,6 +449,10 @@ classdef NavSatellite < handle
                     var.eph_mdl(:,jj) = repmat(sum(err.eph_mdl(:,jj).^2, 2)/(sum(jj)-1), 1, sum(jj));
                     var.clk_mdl(:,jj) = repmat(sum(err.clk_mdl(:,jj).^2, 2)/(sum(jj)-1), 1, sum(jj));
                 end
+
+                % tra1 = Trajectory(tt(jj), xprop(1:6,jj), 'J2000');
+                % tra2 = Trajectory(tt(jj), xmdl(1:6,jj), 'J2000');
+                % obj.prop.orbit.plot([tra1 tra2], 'J2000');
             end
 
             % work group delays (calibration error, not evolving over time)
@@ -484,7 +498,7 @@ classdef NavSatellite < handle
 
             xn = zeros(9, length(ts));
             if isa(obj.filter, 'struct')
-                xn(1:6,:) = obj.traj(1).get(ts, frame);
+                xn(1:6,:) = obj.traj(1).get(ts, outframe=frame);
                 xn(7:9,:) = obj.traj(2).get(ts);
                 % add noise to reference trajectory for nav states
                 xn = mvnrnd(xn', obj.filter.P0)';
@@ -498,7 +512,7 @@ classdef NavSatellite < handle
 
             elseif isempty(obj.filter)
                 % no filter at all, return truth states
-                xn(1:6,:) = obj.traj(1).get(ts, frame);
+                xn(1:6,:) = obj.traj(1).get(ts, outframe=frame);
                 xn(7:9,:) = obj.traj(2).get(ts);
                 Pn = repmat(zeros(9,9), 1, 1, length(ts));
 
@@ -600,7 +614,7 @@ classdef NavSatellite < handle
 
             n = length(ts);
             xuser = user.getstates(ts, 'J2000');
-            xref = obj.traj(1).get(ts, 'J2000');
+            xref = obj.traj(1).get(ts, outframe='J2000');
 
             % initial guess for transmit time is receive time
             tt = ts;
@@ -616,7 +630,7 @@ classdef NavSatellite < handle
                     dt = rlast / obj.c;         % range to time-of-flight (s)
                     tj = ts(i) - dt;            % time offset guess
                     % updated range guess
-                    xref(:,i) = obj.traj(1).get(tj, 'J2000');
+                    xref(:,i) = obj.traj(1).get(tj, outframe='J2000');
                     rj = norm(xref(1:3,i) - xuser(1:3,i));
 
                     % if iteration is converging

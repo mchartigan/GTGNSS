@@ -98,8 +98,8 @@ classdef LunarPropagator < OrbitPropagator
             exp = zeros(1,nsats);
 
             for j=1:nsats
-                xo = traj(j).get(traj.ts(1), 'MOON_OP');
-                xf = traj(j).get(traj.ts(end), 'MOON_OP');
+                xo = traj(j).get(traj.ts(1), outframe='MOON_OP');
+                xf = traj(j).get(traj.ts(end), outframe='MOON_OP');
                 [a,e,i,r0,~,~] = rv2oe(xo(1:3), xo(4:6), obj.pri.GM);
                 [~,~,~,rf,~,~] = rv2oe(xf(1:3), xf(4:6), obj.pri.GM);
 
@@ -126,8 +126,8 @@ classdef LunarPropagator < OrbitPropagator
 
             % assign starting and ending right ascensions
             for j=1:nsats
-                xo = traj(j).get(traj.ts(1), 'MOON_OP');
-                xf = traj(j).get(traj.ts(end), 'MOON_OP');
+                xo = traj(j).get(traj.ts(1), outframe='MOON_OP');
+                xf = traj(j).get(traj.ts(end), outframe='MOON_OP');
                 [~,~,~,RAAN0(j),~,~] = rv2oe(xo(1:3), xo(4:6), obj.pri.GM);
                 [~,~,~,RAANf(j),~,~] = rv2oe(xf(1:3), xf(4:6), obj.pri.GM);
             end
@@ -159,7 +159,7 @@ classdef LunarPropagator < OrbitPropagator
             span = chebichev(n-1);
             fit.VP = traj.ts(end) - t0;
             teval = (span + 1) * fit.VP / 2 + t0;
-            xeval = traj.get(teval, 'J2000');
+            xeval = traj.get(teval, outframe='J2000');
             
             % change to orbital elements
             as = zeros(1,n); es = zeros(1,n); is = zeros(1,n);
@@ -195,12 +195,12 @@ classdef LunarPropagator < OrbitPropagator
             % DIFFERENTIAL CORRECTIONS %
             if diff
                 % get effective Keplerian elements
-                kepmsg = [t0 0 0 0 0 0 0 0 0 fit.t_oe ...
+                kepmsg = [t0 0 0 0 t0 0 0 0 0 fit.t_oe ...
                           fit.a fit.e fit.i fit.RAAN fit.w fit.M0 fit.A];
     
                 xbase = zeros(6,n);
                 for k=1:n
-                    temp = RadiometricObsSim.geteph(teval(k), 0, kepmsg, 1);
+                    temp = RadiometricObsSim.geteph(teval(k), 0, kepmsg, 1, obj.pri.GM);
                     xbase(:,k) = temp(1:6);
                     % T_ME2J = [T_J2ME(1:3,1:3)' zeros(3)
                     %           T_J2ME(4:6,1:3)' T_J2ME(4:6,4:6)'];
@@ -220,6 +220,8 @@ classdef LunarPropagator < OrbitPropagator
     
                 % how to compute values: (basis(2*(tau)/dt - 1) * H)
             end
+
+            
         end
 
         function plot(obj,traj,frame)
@@ -240,7 +242,7 @@ classdef LunarPropagator < OrbitPropagator
 
             % convert data to new frame if required
             for i=1:nsats
-                x = traj(i).get(ts, frame);
+                x = traj(i).get(ts, outframe=frame);
                 data(:,:,i) = x(1:3,:)';
             end
 
