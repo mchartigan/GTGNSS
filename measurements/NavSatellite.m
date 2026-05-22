@@ -165,7 +165,7 @@ classdef NavSatellite < handle
             % ANTENNA GAIN %
             % compute transmitter angle %
             % state of user w.r.t. obj.prop.body
-            xuser = user.motion.getpos(ts, 'J2000');
+            xuser = user.motion.getpos(ts);
             % state of sat w.r.t. obj.prop.body
             xsat  = obj.traj(1).get(tt, outframe='J2000');
             % get User->obj.prop.body direction at each time step
