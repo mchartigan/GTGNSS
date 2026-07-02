@@ -153,30 +153,27 @@ classdef RadiometricObsSim < Measurement
                 end
             end
 
-            % plot CN0
-            tplot = (ts - ts(1)) / 60;
-            figure();
-            plotformat("APA", 0.5);
-            styles = {'-', '--', '-.', ':'};
-            plot(0, 0, color='none');
-            hold on;
-            for i=1:obj.nsats
-                valid = ~isnan(R(i,:));
-                plot(tplot(valid), CN0(i,valid), LineWidth=2, LineStyle=styles{mod(i-1,4)+1});
-            end
-            hold off; grid on;
-            axis([tplot(1) tplot(end) 0 50]);
-            xlabel("Time (mins)");
-            ylabel("C/N0 (dB-Hz)");
-            title("Receiver CN0 for each LDN link");
-            % 
-            % % plot # links?
+            % % plot CN0
+            % tplot = (ts - ts(1)) / 60;
             % figure();
             % plotformat("APA", 0.5);
-            % num = sum(CN0 > 0, 1);
-            % plot(tplot, num);
+            % styles = {'-', '--', '-.', ':'};
+            % plot(0, 0, color='none');
+            % hold on;
+            % for i=1:obj.nsats
+            %     valid = ~isnan(R(i,:));
+            %     plot(tplot(valid), CN0(i,valid), LineWidth=2, LineStyle=styles{mod(i-1,4)+1});
+            % end
+            % hold off; grid on;
+            % 
+            % ax = xticklabels;
+            % xticklabels(flip(ax));
+            % axis([tplot(1) tplot(end) 35 50]);
             % xlabel("Time (mins)");
-            % ylabel("# sats w/ CN0 > 0");
+            % ylabel("C/N0 (dB-Hz)");
+            % title("Receiver CN0 for each LDN link");
+            % legend(["", "LDN-1", "LDN-2", "LDN-3", "LDN-4", "LDN-5"], ...
+            %     location="southeast");
         end
 
         function [y,xs] = computemeas(obj,tr,x,tprev,xprev)
@@ -444,9 +441,10 @@ classdef RadiometricObsSim < Measurement
             end
 
             figure();
-            plotformat("APA", 0.25*obj.m + 0.25, color="greyscale");
+            plotformat("APA", 0.25, width=18.1*2, color="greyscale");
             colors = colororder;
-            tiledlayout(obj.m,1);
+            % tiledlayout(obj.m,1);
+            tiledlayout(1,obj.m);
 
             % plot pseudorange error
             nexttile();
@@ -461,9 +459,13 @@ classdef RadiometricObsSim < Measurement
             patch([dt flip(dt)], [-p_std flip(p_std)], colors(2,:), ...
                 "FaceAlpha", 0.6, "EdgeColor", "none");
             hold off; grid on;
-            axis([t(1) t(end) -inf inf]);
+            ax = xticklabels;
+            xticklabels(flip(ax));
+            axis([t(1) t(end) -15 15]);
+            xlabel(sprintf("Time before landing %s", units));
             ylabel("Error (m)");
             title("Pseudorange measurement error");
+            legend(["Sample error", "3\sigma bound"], location="northwest");
 
             % compute delta-pseudorange at measurement spacing and plot
             if obj.user.rx.PLL
@@ -475,14 +477,17 @@ classdef RadiometricObsSim < Measurement
                 dp_err(msgbound) = [];
                 dp_std(msgbound) = [];
                 dt(msgbound) = [];
-                plot(dt, dp_err);
+                plot(dt, dp_err*1e3);
                 hold on;
-                patch([dt flip(dt)], [-dp_std flip(dp_std)], colors(2,:), ...
+                patch([dt flip(dt)], [-dp_std flip(dp_std)]*1e3, colors(2,:), ...
                     "FaceAlpha", 0.6, "EdgeColor", "none");
                 hold off; grid on;
-                axis([t(1) t(end) -inf inf]);
-                ylabel("Error (m)");
-                title("Delta-pseudorange measurement error");
+                ax = xticklabels;
+                xticklabels(flip(ax));
+                axis([t(1) t(end) -2.5 2.5]);
+                xlabel(sprintf("Time before landing %s", units));
+                ylabel("Error (mm)");
+                title("TDCP measurement error");
             end
 
             % plot Doppler error
@@ -491,18 +496,21 @@ classdef RadiometricObsSim < Measurement
                 dt = t(maskFLL);
                 f_err = yobs(3,maskFLL) - ycomp(3,maskFLL);
                 f_std = 3 * sqrt(R(3,maskFLL));
-                plot(dt, f_err);
+                plot(dt, f_err*1e2);
                 hold on;
-                patch([dt flip(dt)], [-f_std flip(f_std)], colors(2,:), ...
+                patch([dt flip(dt)], [-f_std flip(f_std)]*1e2, colors(2,:), ...
                     "FaceAlpha", 0.6, "EdgeColor", "none");
                 hold off; grid on;
-                axis([t(1) t(end) -inf inf]);
-                ylabel("Error (m/s)");
+                ax = xticklabels;
+                xticklabels(flip(ax));
+                axis([t(1) t(end) -7 7]);
+                xlabel(sprintf("Time before landing %s", units));
+                ylabel("Error (cm/s)");
                 title("Doppler measurement error");
             end
 
             % ending data
-            xlabel(sprintf("Time %s", units));
+            % xlabel(sprintf("Time %s", units));
         end
 
         function plotvariance(obj,t,var,yobs)

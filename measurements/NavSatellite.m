@@ -470,7 +470,7 @@ classdef NavSatellite < handle
             % convert to m^2
             var.phase(1,:) = var.phase(1,:) * (2*pi*user.rx.freq)^(-2) * obj.c^2;
             % (s/s)^2 to (m/s)^2
-            var.phase(2,:) = obj.prop.clock.stability(user.rx.T_FLL) * obj.c^2;
+            var.phase(2,:) = obj.prop.clock.stability(user.rx.T_FLL);
 
             % Apply only the errors that will occur due to signal
             % transmission. We're making this realistic here!
@@ -638,9 +638,11 @@ classdef NavSatellite < handle
                         tt(i) = tj;
                         r(i) = rj;
                         break;
-                    elseif j == 10
-                        error("timeofflight:notConverged", ...
+                    elseif j == 20
+                        warning("timeofflight:notConverged", ...
                             "Time %d failed to converge in %d iterations.", i, j);
+                        tt(i) = tj;
+                        r(i) = rj;
                     end
 
                     rlast = rj;                 % update iteration

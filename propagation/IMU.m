@@ -30,7 +30,7 @@ classdef IMU < handle
             %   Input:
             %    - t; time in s past J2000
 
-            a = obj.a_m.get(t,'J2000') + mvnrnd([0 0 0], eye(3)*obj.Sn*obj.step)';
+            a = obj.a_m.get(t,outframe='J2000') + mvnrnd([0 0 0], eye(3)*obj.Sn*obj.step)';
         end
 
         function Q = noise(obj,dt)

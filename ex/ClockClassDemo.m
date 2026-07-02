@@ -15,9 +15,9 @@ clc, clear, close all;
 c = 299792458;                              % m/s, speed of light
 
 % create Clock instance
-clk = Clock(0, [0 0 0], "MicrochipCSAC");   % oscillator propagator
+clk = Clock("MicrochipCSAC", [0 0 0 0]', normalize=c);   % oscillator propagator
 % set starting state again since now we've gotten the aging rate
-clk.x0 = [0 0 clk.a];
+x0 = [0 0 clk.a];
 a = clk.a;
 % compute the 3-sigma allan deviation (in mm/s) @10s
 adev = c * 1e3 * 3 * clk.s_allan(2);

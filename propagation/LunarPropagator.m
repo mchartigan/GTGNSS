@@ -224,7 +224,7 @@ classdef LunarPropagator < OrbitPropagator
             
         end
 
-        function plot(obj,traj,frame)
+        function plot(obj,traj,frame,azel)
             %PLOT Generates a plot of the provided satellite trajectories in
             %the specified frame.
             %   Input:
@@ -234,6 +234,7 @@ classdef LunarPropagator < OrbitPropagator
                 obj     (1,1)   LunarPropagator
                 traj    (1,:)   Trajectory
                 frame   (1,:)   char
+                azel    (1,2)   double = [-37.5 30]
             end
 
             ts = traj(1).ts;
@@ -248,7 +249,8 @@ classdef LunarPropagator < OrbitPropagator
 
             % % not supported utility
             figure();
-            plotformat("APA", 1);
+            plotformat("APA", 0.9);
+            figpos = get(gcf, 'Position');
             % Display moon in trajectory plot
             R = obj.pri.R;
             [Imoon, ~] = imread("Moon_HermesCelestiaMotherlode.jpg");
@@ -299,6 +301,9 @@ classdef LunarPropagator < OrbitPropagator
             ylabel("y_{"+SUB+"} ("+UNIT+")");
             zlabel("z_{"+SUB+"} ("+UNIT+")");
             title("Satellite trajectories");
+
+            view(azel);
+            set(gcf, 'Position', figpos);
         end
     end
 end

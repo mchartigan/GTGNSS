@@ -218,7 +218,7 @@ classdef Clock < Propagator
             arguments
                 obj (1,1) Clock
                 ts  (1,:) double
-                P0  (3,3) double
+                P0  (:,:) double
             end
 
             n = length(ts);
@@ -361,6 +361,35 @@ classdef Clock < Propagator
             err = mvnrnd(0, var);
         end
 
+        function [pos,vel] = getsisecontrib(obj,tf,P0)
+            %GETSISECONTRIB Returns the signal-in-space error contribution
+            %of the clock.
+            %   Input:
+            %    - tf; end time projection
+            %    - P0; starting clock covariance
+            %   Output:
+            %    - pos; position variance Trajectory (m)^2
+            %    - vel; velocity variance Trajectory (mm/s)^2
+
+            ts = 0:1:tf;
+            T = 10;
+            fc = 2492.028e6;
+            Bn = 20;
+            P = obj.proplyapunov(ts,P0);
+            % white phase measurement noise
+            [~,v_WP] = obj.getjitter(fc, Bn);
+            % convert to m
+            v_WP = v_WP * (2*pi*fc)^(-2) * obj.c^2;
+
+            pos = reshape(P(1,1,:), 1, []) + v_WP;
+            vel = reshape(P(2,2,:), 1, []);
+            S = obj.noise(T);
+            vel = vel(1:end-5) + 2*v_WP/T^2 + S(1,1)/T^2;
+
+            pos = Trajectory(ts, pos);
+            vel = Trajectory(ts(6:end), 1e6*vel);
+        end
+
         function stm = STM(obj,dt)
             %STM Returns the DT state transition matrix based on the dynamics
             %defined in Zucca and Tavella.
@@ -376,7 +405,7 @@ classdef Clock < Propagator
             end
         end
 
-        function plot(obj,traj)
+        function [ax,tplot] = plot(obj,traj,options)
             %PLOT Plots the phase, freq. offset, and freq. drift for the
             %provided trajectory.
             %   Input:
@@ -384,20 +413,42 @@ classdef Clock < Propagator
             arguments
                 obj     (1,1)   Clock
                 traj    (1,1)   Trajectory
+                options.scale  (1,:) double = []
+                options.labels (1,:) {mustBeText} = strings(0)
+                options.axes   (1,:) matlab.graphics.axis.Axes = []
             end
 
             ts = traj.ts;
             xs = traj.xs;
 
-            if obj.norm == 1
-                units = "ns";
-                xs = xs * 1e9;
-            elseif obj.norm == 1e9
-                units = "ns";
-            elseif obj.norm == obj.c
-                units = "m";
+            % error out if wrong units are provided
+            if ~all(size(options.scale) == size(options.labels)) || ~ismember(length(options.scale), [0 3])
+                error("plot:invalidArg", ...
+                    "If custom units are provided, scale and labels must be the same size.");
+            end
+
+            if isempty(options.scale)
+                if obj.norm == 1
+                    units = ["ns","ns/s","ns/s^2"];
+                    xs = xs * 1e9;
+                elseif obj.norm == 1e9
+                    units = ["ns","ns/s","ns/s^2"];
+                elseif obj.norm == obj.c
+                    units = ["m","m/s","m/s^2"];
+                else
+                    error("Clock:plot", "Unsupported normalization scheme.");
+                end
             else
-                error("Clock:plot", "Unsupported normalization scheme.");
+                xs = xs / obj.norm;
+
+                units = options.labels;
+                xs(1,:) = xs(1,:) * options.scale(1);
+                xs(2,:) = xs(2,:) * options.scale(2);
+                xs(3,:) = xs(3,:) * options.scale(3);
+
+                for i=4:size(xs,1)
+                    xs(i,:) = xs(i,:) * options.scale(2);
+                end
             end
 
             dt = ts - ts(1);
@@ -416,28 +467,54 @@ classdef Clock < Propagator
                 tplot = dt;
             end
 
-            
-            figure();
-            plotformat("APA", 0.9);
-            tiledlayout(3,1);
-            
-            nexttile;
-            plot(tplot, xs(1,:));
-            grid on;
-            ylabel(sprintf("Phase offset (%s)", units));
-            
-            nexttile;
-            plot(tplot, xs(2,:));
-            grid on;
-            ylabel(sprintf("Freq. offset (%s/s)", units));
-            
-            nexttile;
-            plot(tplot, xs(3,:));
-            grid on;
-            ylabel(sprintf("Freq. drift (%s/s^2)", units));
-            xlabel(sprintf("Time (%s)", time));
 
-            sgtitle("Clock trajectory");
+            if length(options.axes) < 3
+                figure();
+                plotformat("APA", 0.3*size(xs,1));
+                tiledlayout(size(xs,1),1);
+                
+                a1 = nexttile;
+                plot(tplot, xs(1,:), Color="k", LineStyle=":");
+                grid on;
+                ylabel(sprintf("Phase offset (%s)", units(1)));
+                
+                a2 = nexttile;
+                plot(tplot, xs(2,:), Color="k", LineStyle=":");
+                grid on;
+                ylabel(sprintf("Freq. offset (%s)", units(2)));
+
+                ax = [a1 a2];
+
+                for i=4:size(xs,1)
+                    ai = nexttile;
+                    ax = [ax ai];
+                    plot(tplot, xs(i,:), Color="k", LineStyle=":");
+                    grid on;
+                    ylabel(sprintf("Freq. drift (%s)", units(2)));
+                end
+                
+                a3 = nexttile;
+                plot(tplot, xs(3,:), Color="k", LineStyle=":");
+                grid on;
+                ylabel(sprintf("Freq. drift (%s)", units(3)));
+                xlabel(sprintf("Time (%s)", time));
+
+                ax = [ax a3];
+                
+                % sgtitle("Clock trajectory");
+            else
+                hold(options.axes(1), "on");
+                plot(options.axes(1), tplot, xs(1,:), Color="k", ...
+                    LineStyle=":", HandleVisibility="off");
+                hold(options.axes(2), "on");
+                plot(options.axes(2), tplot, xs(2,:), Color="k", ...
+                    LineStyle=":", HandleVisibility="off");
+                hold(options.axes(3), "on");
+                plot(options.axes(3), tplot, xs(3,:), Color="k", ...
+                    LineStyle=":", HandleVisibility="off");
+
+                ax = options.axes;
+            end
         end
 
         function dxdt = dynamics(obj,~,x)
